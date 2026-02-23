@@ -1,27 +1,3 @@
-class SobelBoundaryLoss(nn.Module):
-    """Sobel-based boundary loss for sharper manipulation boundaries.
-
-    Forensic motivation: Penalizes boundary errors by comparing Sobel gradient magnitudes of prediction and target.
-    """
-    def __init__(self):
-        super().__init__()
-        # Sobel kernels
-        sobel_x = torch.tensor([[1, 0, -1], [2, 0, -2], [1, 0, -1]], dtype=torch.float32).view(1, 1, 3, 3)
-        sobel_y = torch.tensor([[1, 2, 1], [0, 0, 0], [-1, -2, -1]], dtype=torch.float32).view(1, 1, 3, 3)
-        self.register_buffer('sobel_x', sobel_x)
-        self.register_buffer('sobel_y', sobel_y)
-
-    def forward(self, pred: Tensor, target: Tensor) -> Tensor:
-        pred = torch.sigmoid(pred)
-        target = target.float()
-        # Compute gradients
-        grad_pred_x = F.conv2d(pred, self.sobel_x, padding=1)
-        grad_pred_y = F.conv2d(pred, self.sobel_y, padding=1)
-        grad_target_x = F.conv2d(target, self.sobel_x, padding=1)
-        grad_target_y = F.conv2d(target, self.sobel_y, padding=1)
-        grad_pred = torch.sqrt(grad_pred_x ** 2 + grad_pred_y ** 2 + 1e-6)
-        grad_target = torch.sqrt(grad_target_x ** 2 + grad_target_y ** 2 + 1e-6)
-        return F.l1_loss(grad_pred, grad_target)
 """Training losses for NGIML multi-stage localization."""
 from __future__ import annotations
 
@@ -124,7 +100,7 @@ class LovaszHingeLoss(nn.Module):
 class MultiStageLossConfig:
     """Configuration flags for the combined Dice + weighted BCE loss.
 
-    Forensic motivation: Reduce deep supervision strength so final prediction dominates total loss, improving stability for forensic segmentation.
+    Forensic motivation: Reduce deep supervision strength so final prediction dominates total loss, improving stability for forensic segmentation. Optionally applies hard pixel mining to focus on ambiguous regions.
     """
 
     dice_weight: float = 1.0
@@ -140,6 +116,7 @@ class MultiStageLossConfig:
     tversky_alpha: float = 0.3
     tversky_beta: float = 0.7
     lovasz_weight: float = 0.0  # Weight for Lovasz Hinge Loss
+    hard_pixel_mining: bool = True  # Enable hard pixel mining by default
 
 
 
@@ -198,11 +175,23 @@ class MultiStageManipulationLoss(nn.Module):
 
             dice = self.dice(logits, target)
             if self.hybrid_mode == "dice_bce":
-                bce = F.binary_cross_entropy_with_logits(logits, target, pos_weight=pos_weight)
+                bce = F.binary_cross_entropy_with_logits(logits, target, pos_weight=pos_weight, reduction="none")
                 hybrid_term = self.cfg.bce_weight * bce
             else:
                 focal = self.focal(logits, target)
                 hybrid_term = self.cfg.bce_weight * focal
+
+            # Hard pixel mining: weight loss by pixel difficulty
+            if getattr(self.cfg, "hard_pixel_mining", False):
+                with torch.no_grad():
+                    pred_prob = torch.sigmoid(logits)
+                    difficulty = torch.abs(pred_prob - target)
+                    weight = 1.0 + 2.0 * (difficulty > 0.3).float()
+                # Apply weighting to BCE/focal and dice
+                hybrid_term = (hybrid_term * weight).mean()
+                dice = (1.0 - ((1.0 - dice) * weight).mean())  # Weighted dice
+            else:
+                hybrid_term = hybrid_term.mean() if hybrid_term.ndim > 0 else hybrid_term
 
             stage_loss = self.cfg.dice_weight * dice + hybrid_term
             if self.cfg.tversky_weight > 0:
@@ -220,6 +209,30 @@ class MultiStageManipulationLoss(nn.Module):
 
         return total_loss / max(normalizer, 1e-6)
 
+class SobelBoundaryLoss(nn.Module):
+    """Sobel-based boundary loss for sharper manipulation boundaries.
+
+    Forensic motivation: Penalizes boundary errors by comparing Sobel gradient magnitudes of prediction and target.
+    """
+    def __init__(self):
+        super().__init__()
+        # Sobel kernels
+        sobel_x = torch.tensor([[1, 0, -1], [2, 0, -2], [1, 0, -1]], dtype=torch.float32).view(1, 1, 3, 3)
+        sobel_y = torch.tensor([[1, 2, 1], [0, 0, 0], [-1, -2, -1]], dtype=torch.float32).view(1, 1, 3, 3)
+        self.register_buffer('sobel_x', sobel_x)
+        self.register_buffer('sobel_y', sobel_y)
+
+    def forward(self, pred: Tensor, target: Tensor) -> Tensor:
+        pred = torch.sigmoid(pred)
+        target = target.float()
+        # Compute gradients
+        grad_pred_x = F.conv2d(pred, self.sobel_x, padding=1)
+        grad_pred_y = F.conv2d(pred, self.sobel_y, padding=1)
+        grad_target_x = F.conv2d(target, self.sobel_x, padding=1)
+        grad_target_y = F.conv2d(target, self.sobel_y, padding=1)
+        grad_pred = torch.sqrt(grad_pred_x ** 2 + grad_pred_y ** 2 + 1e-6)
+        grad_target = torch.sqrt(grad_target_x ** 2 + grad_target_y ** 2 + 1e-6)
+        return F.l1_loss(grad_pred, grad_target)
 
 __all__ = [
     "SoftDiceLoss",

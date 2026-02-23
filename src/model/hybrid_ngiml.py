@@ -74,10 +74,14 @@ class HybridNGIMLConfig:
     use_low_level: bool = True
     use_context: bool = True
     use_residual: bool = True
+    enable_residual_attention: bool = True  # Residual-guided attention (enabled by default)
 
 
 class HybridNGIML(nn.Module):
-    """Full NGIML model exposing fused multi-scale features."""
+    """Full NGIML model exposing fused multi-scale features.
+
+    Forensic motivation: Optionally applies residual-guided attention to semantic features before fusion, improving manipulation localization.
+    """
 
     def __init__(self, config: HybridNGIMLConfig | None = None) -> None:
         super().__init__()
@@ -110,10 +114,32 @@ class HybridNGIML(nn.Module):
         self.fusion = MultiStageFeatureFusion(branch_channels, self.cfg.fusion)
         self.decoder = UNetDecoder(self.cfg.fusion.fusion_channels, self.cfg.decoder)
 
+        # Residual-guided attention module (optional)
+        self.enable_residual_attention = getattr(self.cfg, 'enable_residual_attention', False)
+        if self.enable_residual_attention:
+            # Project residual features to attention map (per stage)
+            res_channels = branch_channels.get("residual", [0])
+            sem_channels = branch_channels.get("low_level", [0])
+            # Use highest-resolution features for attention
+            attn_in_ch = res_channels[0] if res_channels else 0
+            attn_out_ch = sem_channels[0] if sem_channels else 0
+            self.residual_attention_proj = nn.Conv2d(attn_in_ch, attn_out_ch, kernel_size=1)
+            nn.init.zeros_(self.residual_attention_proj.weight)
+            if self.residual_attention_proj.bias is not None:
+                nn.init.zeros_(self.residual_attention_proj.bias)
+
     def _extract_features(self, x: Tensor, high_pass: Tensor | None = None) -> Dict[str, List[Tensor] | Tensor]:
         low_level = self.efficientnet(x)
         context = self.swin(x)
         residual = self.noise(x, high_pass=high_pass)
+
+        # Residual-guided attention (modulate semantic features before fusion)
+        if self.enable_residual_attention and isinstance(low_level, list) and isinstance(residual, list):
+            # Use highest-resolution features (stage 0)
+            attn_map = torch.sigmoid(self.residual_attention_proj(residual[0]))
+            # Modulate semantic features: semantic_feat = semantic_feat * (1 + attention)
+            low_level[0] = low_level[0] * (1.0 + attn_map)
+
         return {
             "low_level": low_level,
             "context": context,

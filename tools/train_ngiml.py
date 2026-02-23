@@ -39,8 +39,33 @@ from src.model.hybrid_ngiml import HybridNGIML, HybridNGIMLConfig
 from src.model.losses import MultiStageLossConfig, MultiStageManipulationLoss
 
 
+def _build_lr_scheduler(optimizer, cfg):
+    """Builds a learning rate scheduler with optional warmup and cosine/step decay."""
+    if not cfg.lr_schedule or cfg.epochs <= 1:
+        return None
+
+    warmup_epochs = max(0, min(cfg.warmup_epochs, max(cfg.epochs - 1, 0)))
+    min_lr_scale = float(max(0.0, min(cfg.min_lr_scale, 1.0)))
+
+    if getattr(cfg, "scheduler_type", "cosine") == "step":
+        step_size = getattr(cfg, "step_size", 10)
+        gamma = getattr(cfg, "gamma", 0.5)
+        return torch.optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
+
+    def _lr_lambda(epoch: int) -> float:
+        if warmup_epochs > 0 and epoch < warmup_epochs:
+            return min_lr_scale + (1.0 - min_lr_scale) * (float(epoch + 1) / float(warmup_epochs))
+        cosine_total = max(cfg.epochs - warmup_epochs, 1)
+        cosine_epoch = min(max(epoch - warmup_epochs, 0), cosine_total)
+        cosine = 0.5 * (1.0 + math.cos(math.pi * cosine_epoch / cosine_total))
+        return min_lr_scale + (1.0 - min_lr_scale) * cosine
+
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=_lr_lambda)
+
+
 @dataclass
 class TrainConfig:
+    scheduler_type: str = "cosine"  # one of: 'cosine', 'step' (cosine enabled by default)
     manifest: str
     output_dir: str = "runs/ngiml"
     batch_size: int = 8
@@ -131,6 +156,7 @@ class Checkpoint:
 
 
 def parse_args() -> TrainConfig:
+    parser.add_argument("--scheduler-type", type=str, default="cosine", choices=["cosine", "step"], help="LR scheduler type (cosine or step)")
     default_workers = max(2, (os.cpu_count() or 4) // 2)
     parser = argparse.ArgumentParser(description="Train NGIML manipulation localization")
     parser.add_argument("--manifest", required=True, help="Path to prepared manifest JSON")
@@ -339,6 +365,7 @@ def parse_args() -> TrainConfig:
         hard_mining_start_epoch=args.hard_mining_start_epoch,
         hard_mining_weight=args.hard_mining_weight,
         hard_mining_gamma=args.hard_mining_gamma,
+        scheduler_type=args.scheduler_type,
     )
 
 
@@ -500,26 +527,6 @@ def _resolve_manifest_for_training(cfg: TrainConfig, out_dir: Path) -> Path:
 
     print(f"Materializing tar::npz samples to local cache: {cache_root}")
     return _materialize_tar_npz_manifest(manifest_path, cache_root)
-
-
-def _build_lr_scheduler(optimizer: torch.optim.Optimizer, cfg: TrainConfig):
-    if not cfg.lr_schedule or cfg.epochs <= 1:
-        return None
-
-    warmup_epochs = max(0, min(cfg.warmup_epochs, max(cfg.epochs - 1, 0)))
-    min_lr_scale = float(max(0.0, min(cfg.min_lr_scale, 1.0)))
-
-    def _lr_lambda(epoch: int) -> float:
-        # Linear warmup for first warmup_epochs, starting at min_lr_scale (default 0.1)
-        if warmup_epochs > 0 and epoch < warmup_epochs:
-            return min_lr_scale + (1.0 - min_lr_scale) * (float(epoch + 1) / float(warmup_epochs))
-
-        cosine_total = max(cfg.epochs - warmup_epochs, 1)
-        cosine_epoch = min(max(epoch - warmup_epochs, 0), cosine_total)
-        cosine = 0.5 * (1.0 + math.cos(math.pi * cosine_epoch / cosine_total))
-        return min_lr_scale + (1.0 - min_lr_scale) * cosine
-
-    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=_lr_lambda)
 
 
 def _segmentation_counts(logits: torch.Tensor, target: torch.Tensor, threshold: float = 0.5) -> Dict[str, float]:

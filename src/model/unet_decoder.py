@@ -47,7 +47,7 @@ class _ConvBlock(nn.Module):
 class UNetDecoderConfig:
     """Configuration for the U-Net style decoder.
 
-    Forensic motivation: Use InstanceNorm by default to improve stability for forensic segmentation.
+    Forensic motivation: Use InstanceNorm by default to improve stability for forensic segmentation. Optionally inject edge-aware refinement for sharper boundaries. Optionally apply Dropout2d to the highest-res decoder output to regularize overfitting to spurious artifacts.
     """
 
     decoder_channels: Sequence[int] | None = None
@@ -55,12 +55,22 @@ class UNetDecoderConfig:
     norm: str = "in"  # Default to InstanceNorm
     activation: str = "relu"
     per_stage_heads: bool = True
+    enable_edge_guidance: bool = True  # Edge-aware decoder refinement (enabled by default)
+    use_dropout: bool = True  # Dropout2d in highest-res decoder output enabled by default
+    dropout_p: float = 0.2
 
 
 class UNetDecoder(nn.Module):
-    """U-Net decoder that upsamples fused features into manipulation logits."""
+    """U-Net decoder that upsamples fused features into manipulation logits.
+
+    Forensic motivation: Optionally injects Sobel edge map into highest-resolution decoder feature for improved boundary localization.
+    """
 
     def __init__(self, stage_channels: Sequence[int], config: UNetDecoderConfig | None = None) -> None:
+        self.use_dropout = getattr(self.cfg, 'use_dropout', False)
+        self.dropout_p = getattr(self.cfg, 'dropout_p', 0.2)
+        if self.use_dropout:
+            self.dropout = nn.Dropout2d(self.dropout_p)
         super().__init__()
         if not stage_channels:
             raise ValueError("stage_channels must contain at least one entry")
@@ -74,6 +84,21 @@ class UNetDecoder(nn.Module):
                 raise ValueError("decoder_channels length must match number of fusion stages")
             decoder_channels = tuple(self.cfg.decoder_channels)
         self.decoder_channels = tuple(decoder_channels)
+
+        # Edge-aware decoder refinement (optional)
+        self.enable_edge_guidance = getattr(self.cfg, 'enable_edge_guidance', False)
+        if self.enable_edge_guidance:
+            # Project Sobel edge map to decoder feature channels
+            self.edge_proj = nn.Sequential(
+                nn.Conv2d(1, self.decoder_channels[0], kernel_size=3, padding=1, bias=False),
+                _build_norm(self.cfg.norm, self.decoder_channels[0]),
+                _build_activation(self.cfg.activation),
+            )
+            # Sobel kernels
+            sobel_x = torch.tensor([[1, 0, -1], [2, 0, -2], [1, 0, -1]], dtype=torch.float32).view(1, 1, 3, 3)
+            sobel_y = torch.tensor([[1, 2, 1], [0, 0, 0], [-1, -2, -1]], dtype=torch.float32).view(1, 1, 3, 3)
+            self.register_buffer('sobel_x', sobel_x)
+            self.register_buffer('sobel_y', sobel_y)
 
         self.skip_projections = nn.ModuleList(
             [
@@ -112,11 +137,26 @@ class UNetDecoder(nn.Module):
             ]
         )
 
-    def forward(self, features: List[Tensor]) -> List[Tensor]:
+    def forward(self, features: List[Tensor], image: Tensor = None) -> List[Tensor]:
         if len(features) != len(self.stage_channels):
             raise ValueError("Feature list length must match number of decoder stages")
 
         projected = [proj(feat) for proj, feat in zip(self.skip_projections, features)]
+
+        # Edge-aware refinement: inject projected Sobel edge map into highest-res decoder feature
+        if self.enable_edge_guidance and image is not None:
+            # Compute grayscale edge map
+            with torch.no_grad():
+                if image.shape[1] > 1:
+                    gray = image.mean(dim=1, keepdim=True)
+                else:
+                    gray = image
+                grad_x = F.conv2d(gray, self.sobel_x, padding=1)
+                grad_y = F.conv2d(gray, self.sobel_y, padding=1)
+                edge_mag = torch.sqrt(grad_x ** 2 + grad_y ** 2 + 1e-6)
+            edge_proj = self.edge_proj(edge_mag)
+            projected[0] = projected[0] + edge_proj
+
         x = self.bottleneck(projected[-1])
 
         if self.cfg.per_stage_heads:
@@ -134,9 +174,15 @@ class UNetDecoder(nn.Module):
                 predictions[idx] = self.predictors[idx](x)
 
         if self.cfg.per_stage_heads:
-            return [pred for pred in predictions if pred is not None]
+            # Optionally apply dropout to highest-res output
+            out_preds = [pred for pred in predictions if pred is not None]
+            if self.use_dropout and out_preds:
+                out_preds[-1] = self.dropout(out_preds[-1])
+            return out_preds
 
         final = self.predictors[0](x)
+        if self.use_dropout:
+            final = self.dropout(final)
         return [final]
 
 

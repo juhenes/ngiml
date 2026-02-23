@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 import io
 import json
 import tarfile
@@ -10,13 +11,15 @@ import pandas as pd
 from bisect import bisect_right
 from pathlib import Path
 from typing import Dict, Iterable, List, Sequence
-
 import numpy as np
 import torch
 import torch.nn.functional as NN_F
 from torch.utils.data import DataLoader, Dataset, Sampler, WeightedRandomSampler
 from torchvision.transforms import functional as F
 from torchvision.transforms.functional import InterpolationMode
+from PIL import Image
+import random
+import io as pyio
 
 from .config import AugmentationConfig, Manifest, SampleRecord
 
@@ -206,6 +209,33 @@ class PerDatasetDataset(Dataset):
 
         if mask is None:
             mask = torch.zeros((1, image.shape[-2], image.shape[-1]), dtype=torch.float32)
+
+        # --- JPEG compression augmentation ---
+        cfg = self.aug_cfg
+        if cfg.jpeg_aug_prob > 0 and self.training and random.random() < cfg.jpeg_aug_prob:
+            # Convert to PIL, compress, reload as tensor
+            img = image.permute(1, 2, 0).cpu().numpy()
+            img = (img * 255).clip(0, 255).astype(np.uint8)
+            pil_img = Image.fromarray(img)
+            quality = random.randint(cfg.jpeg_quality_min, cfg.jpeg_quality_max)
+            buf = pyio.BytesIO()
+            pil_img.save(buf, format="JPEG", quality=quality)
+            buf.seek(0)
+            pil_img_jpeg = Image.open(buf).convert("RGB")
+            image = F.to_tensor(pil_img_jpeg)
+
+        # --- Multi-scale training (random resize before crop) ---
+        if cfg.multiscale_training and self.training:
+            short_min, short_max = cfg.multiscale_short_side_range
+            h, w = image.shape[-2:]
+            short_side = min(h, w)
+            target_short = random.randint(short_min, short_max)
+            scale = target_short / float(short_side)
+            new_h, new_w = int(round(h * scale)), int(round(w * scale))
+            image = F.resize(image, [new_h, new_w], interpolation=InterpolationMode.BILINEAR)
+            mask = F.resize(mask, [new_h, new_w], interpolation=InterpolationMode.NEAREST)
+            if high_pass is not None:
+                high_pass = F.resize(high_pass, [new_h, new_w], interpolation=InterpolationMode.BILINEAR)
 
         label = torch.tensor(record.label, dtype=torch.long)
 

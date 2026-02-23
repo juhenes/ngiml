@@ -31,7 +31,10 @@ def _build_activation(name: str) -> nn.Module:
 
 @dataclass
 class FeatureFusionConfig:
-    """Config container for the multi-stage fusion module."""
+    """Config container for the multi-stage fusion module.
+
+    Forensic motivation: Optionally adds a spatial refinement layer after fusion output for each stage, improving spatial detail without large FLOP increase.
+    """
 
     fusion_channels: Sequence[int]
     noise_branch: str = "residual"
@@ -39,12 +42,13 @@ class FeatureFusionConfig:
     noise_decay: float = 1.0
     norm: str = "bn"
     activation: str = "relu"
+    fusion_refinement: bool = True  # Add Conv3x3+IN+ReLU after fusion output (enabled by default)
 
 
 class _AdaptiveFusionStage(nn.Module):
     """Stage-wise fusion with learned gating and post refinement.
 
-    Forensic motivation: Prevent gate collapse by initializing fusion gates equally and bounding their range, ensuring all branches contribute to the fused features.
+    Forensic motivation: Optionally adds a spatial refinement layer after fusion output for each stage, improving spatial detail without large FLOP increase.
     """
     def __init__(
         self,
@@ -52,6 +56,7 @@ class _AdaptiveFusionStage(nn.Module):
         out_channels: int,
         norm: str,
         activation: str,
+        fusion_refinement: bool = False,
     ) -> None:
         super().__init__()
         # Conv only for projected features before fusion (no norm/activation)
@@ -72,6 +77,13 @@ class _AdaptiveFusionStage(nn.Module):
             _build_norm(norm, out_channels),
             _build_activation(activation),
         )
+        self.fusion_refinement = fusion_refinement
+        if self.fusion_refinement:
+            self.refine2 = nn.Sequential(
+                nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
+                nn.InstanceNorm2d(out_channels, affine=True),
+                nn.ReLU(inplace=True),
+            )
 
     def forward(
         self,
@@ -112,12 +124,16 @@ class _AdaptiveFusionStage(nn.Module):
 
         fused = fused / (weight_sum + eps)
         fused = self.refine(fused)
+        if self.fusion_refinement:
+            fused = self.refine2(fused)
         return fused
 
 
 class MultiStageFeatureFusion(nn.Module):
-    """Fuses multi-branch features across stages with adaptive gating."""
+    """Fuses multi-branch features across stages with adaptive gating.
 
+    Forensic motivation: Optionally adds a spatial refinement layer after fusion output for each stage, improving spatial detail without large FLOP increase.
+    """
     def __init__(
         self,
         branch_channels: Dict[str, Sequence[int]],
@@ -142,6 +158,7 @@ class MultiStageFeatureFusion(nn.Module):
                     config.fusion_channels[stage_idx],
                     norm=config.norm,
                     activation=config.activation,
+                    fusion_refinement=getattr(config, 'fusion_refinement', False),
                 )
             )
 
