@@ -36,11 +36,11 @@ def _default_residual_optim() -> OptimizerGroupConfig:
 
 
 def _default_fusion_optim() -> OptimizerGroupConfig:
-    return OptimizerGroupConfig(lr=2e-4, weight_decay=1e-4)
+    return OptimizerGroupConfig(lr=1.5e-4, weight_decay=1e-4)
 
 
 def _default_decoder_optim() -> OptimizerGroupConfig:
-    return OptimizerGroupConfig(lr=3e-4, weight_decay=1e-4)
+    return OptimizerGroupConfig(lr=2e-4, weight_decay=1e-4)
 
 
 @dataclass
@@ -56,7 +56,7 @@ class HybridNGIMLOptimizerConfig:
     decoder: OptimizerGroupConfig = field(default_factory=_default_decoder_optim)
     betas: Tuple[float, float] = (0.9, 0.999)
     eps: float = 1e-8
-    freeze_backbone_epochs: int = 5  # Number of epochs to freeze backbone
+    freeze_backbone_epochs: int = 5
 
 
 @dataclass
@@ -67,7 +67,7 @@ class HybridNGIMLConfig:
     swin: SwinBackboneConfig = field(default_factory=SwinBackboneConfig)
     residual: ResidualNoiseConfig = field(default_factory=ResidualNoiseConfig)
     fusion: FeatureFusionConfig = field(
-        default_factory=lambda: FeatureFusionConfig(fusion_channels=(128, 192, 256, 320))
+        default_factory=lambda: FeatureFusionConfig(fusion_channels=(64, 128, 192, 256))
     )
     decoder: UNetDecoderConfig = field(default_factory=UNetDecoderConfig)
     optimizer: HybridNGIMLOptimizerConfig = field(default_factory=HybridNGIMLOptimizerConfig)
