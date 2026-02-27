@@ -179,35 +179,59 @@ class SwinBackbone(nn.Module):
         except AssertionError as err:
             msg = str(err)
             # Some timm variants assert on an expected input size. If that occurs,
-            # try resizing to the model's configured default input size and retry.
+            # try padding to the model default aspect ratio then resize to exact
+            # expected size to recover from the assertion.
             _LOG.warning("Swin model assertion during forward: %s", msg)
-            default_cfg = getattr(self.model, "default_cfg", None) or getattr(self.model, "default_cfg", {})
+            default_cfg = getattr(self.model, "default_cfg", None) or {}
             input_size = default_cfg.get("input_size") if isinstance(default_cfg, dict) else None
-            # Prefer padding (preserve localization) over downscaling to the model's
-            # default input size. Pad to the next multiple of the patch size so
-            # attention masks and grid sizes are consistent, then retry.
             try:
-                h_cur, w_cur = x.shape[-2], x.shape[-1]
-                ph, pw = self.patch_size
-                pad_h = ((h_cur + ph - 1) // ph) * ph - h_cur
-                pad_w = ((w_cur + pw - 1) // pw) * pw - w_cur
-                if pad_h or pad_w:
-                    _LOG.warning(
-                        "Padding input from (%d,%d) by (h=%d,w=%d) to match patch multiple and preserve resolution",
-                        h_cur,
-                        w_cur,
-                        pad_h,
-                        pad_w,
-                    )
-                    x_padded = NN_F.pad(x, (0, pad_w, 0, pad_h), value=0)
+                if input_size:
+                    exp_h, exp_w = int(input_size[1]), int(input_size[2])
+                    h_cur, w_cur = x.shape[-2], x.shape[-1]
+                    # scale factor to ensure new_h >= h_cur and new_w >= w_cur
+                    s = max(h_cur / exp_h, w_cur / exp_w, 1.0)
+                    new_h = int((exp_h * s + 0.9999))
+                    new_w = int((exp_w * s + 0.9999))
+                    pad_h = max(0, new_h - h_cur)
+                    pad_w = max(0, new_w - w_cur)
+                    if pad_h or pad_w:
+                        _LOG.warning(
+                            "Padding input from (%d,%d) by (h=%d,w=%d) to match model aspect ratio before resize",
+                            h_cur,
+                            w_cur,
+                            pad_h,
+                            pad_w,
+                        )
+                        x_padded = NN_F.pad(x, (0, pad_w, 0, pad_h), value=0)
+                    else:
+                        x_padded = x
+                    # Propagate spatial metadata for the padded size
+                    self._propagate_spatial_metadata(x_padded.shape[-2], x_padded.shape[-1])
+                    # Resize to exact expected model input size
+                    x_resized = NN_F.interpolate(x_padded, size=(exp_h, exp_w), mode="bilinear", align_corners=False)
+                    features = self.model(x_resized)
                 else:
-                    # Already a multiple and still failing; re-raise the original assertion.
-                    raise err
-                # Ensure spatial metadata and attention masks match the padded input
-                self._propagate_spatial_metadata(x_padded.shape[-2], x_padded.shape[-1])
-                features = self.model(x_padded)
+                    # No default input size available; fall back to patch-multiple padding
+                    h_cur, w_cur = x.shape[-2], x.shape[-1]
+                    ph, pw = self.patch_size
+                    pad_h = ((h_cur + ph - 1) // ph) * ph - h_cur
+                    pad_w = ((w_cur + pw - 1) // pw) * pw - w_cur
+                    if pad_h or pad_w:
+                        _LOG.warning(
+                            "Padding input from (%d,%d) by (h=%d,w=%d) to match patch multiple and preserve resolution",
+                            h_cur,
+                            w_cur,
+                            pad_h,
+                            pad_w,
+                        )
+                        x_padded = NN_F.pad(x, (0, pad_w, 0, pad_h), value=0)
+                        self._propagate_spatial_metadata(x_padded.shape[-2], x_padded.shape[-1])
+                        features = self.model(x_padded)
+                    else:
+                        # Already a multiple and still failing; re-raise the original assertion.
+                        raise err
             except AssertionError:
-                # If padding didn't help (e.g., model insists on a specific size),
+                # If padding/resize didn't help (e.g., model insists on a specific size),
                 # re-raise the original assertion to surface a clear error.
                 raise err
         # Select only the requested feature maps
