@@ -53,7 +53,9 @@ class PreparationConfig:
 class AugmentationConfig:
     """Augmentation config for NGIML dataloader.
 
-    Forensic motivation: Optionally applies JPEG compression and multi-scale resizing to improve generalization and robustness to manipulation scale/quality.
+    Forensic motivation: Applies multi-scale resizing and other lightweight
+    augmentations to improve generalization and robustness to manipulation
+    scale/quality.
     """
     enable: bool = True
     views_per_sample: int = 1
@@ -74,10 +76,7 @@ class AugmentationConfig:
     contrast_jitter_factors: Sequence[float] = (0.9, 1.1)
     enable_noise: bool = True
     noise_std_range: Sequence[float] = (0.0, 0.0)
-    # JPEG compression augmentation
-    jpeg_aug_prob: float = 0.0  # Probability to apply JPEG compression (0 disables)
-    jpeg_quality_min: int = 60
-    jpeg_quality_max: int = 100
+    
     # Multi-scale training
     multiscale_training: bool = True
     multiscale_short_side_range: Sequence[int] = (384, 640)

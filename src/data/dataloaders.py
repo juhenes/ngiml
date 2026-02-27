@@ -13,13 +13,12 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Sequence
 import numpy as np
 import torch
+import math
 import torch.nn.functional as NN_F
 from torch.utils.data import DataLoader, Dataset, Sampler, WeightedRandomSampler
 from torchvision.transforms import functional as F
 from torchvision.transforms.functional import InterpolationMode
-from PIL import Image
 import random
-import io as pyio
 import functools
 
 from .config import AugmentationConfig, Manifest, SampleRecord
@@ -228,19 +227,7 @@ class PerDatasetDataset(Dataset):
                 if high_pass is not None:
                     high_pass = F.resize(high_pass, [new_h, new_w], interpolation=InterpolationMode.BILINEAR)
 
-        # --- JPEG compression augmentation ---
         cfg = self.aug_cfg
-        if cfg.jpeg_aug_prob > 0 and self.training and random.random() < cfg.jpeg_aug_prob:
-            # Convert to PIL, compress, reload as tensor
-            img = image.permute(1, 2, 0).cpu().numpy()
-            img = (img * 255).clip(0, 255).astype(np.uint8)
-            pil_img = Image.fromarray(img)
-            quality = random.randint(cfg.jpeg_quality_min, cfg.jpeg_quality_max)
-            buf = pyio.BytesIO()
-            pil_img.save(buf, format="JPEG", quality=quality)
-            buf.seek(0)
-            pil_img_jpeg = Image.open(buf).convert("RGB")
-            image = F.to_tensor(pil_img_jpeg)
 
         # --- Multi-scale training (random resize before crop) ---
         if cfg.multiscale_training and self.training:
@@ -652,6 +639,87 @@ def _apply_gpu_augmentations(
             image = torch.clamp(image + noise, 0.0, 1.0)
 
     return image, mask, high_pass
+
+
+def _apply_gpu_augmentations_batch(
+    images: torch.Tensor,
+    masks: torch.Tensor,
+    cfg: AugmentationConfig,
+    high_pass: torch.Tensor | None = None,
+    generator: torch.Generator | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    """Batched version of `_apply_gpu_augmentations` operating on tensors
+    shaped `(B,C,H,W)` and `(B,1,H,W)` for masks. This implements the
+    most common augmentations (random flips, rotations, color jitter, noise)
+    using vectorized torch ops to reduce Python/kernel-launch overhead.
+    More complex ops (elastic / resized_crop) remain per-sample and are
+    skipped here for simplicity.
+    """
+    if generator is None:
+        try:
+            generator = torch.Generator(device=images.device)
+        except Exception:
+            generator = torch.Generator()
+
+    B = images.shape[0]
+
+    def _rand_scalar(shape=(B,)):
+        return torch.rand(shape, device=images.device, generator=generator)
+
+    # Horizontal and vertical flips
+    if cfg.enable_flips:
+        horiz = _rand_scalar() < 0.5
+        vert = _rand_scalar() < 0.2
+        if horiz.any():
+            images[horiz] = torch.flip(images[horiz], dims=[3])
+            masks[horiz] = torch.flip(masks[horiz], dims=[3])
+            if high_pass is not None:
+                high_pass[horiz] = torch.flip(high_pass[horiz], dims=[3])
+        if vert.any():
+            images[vert] = torch.flip(images[vert], dims=[2])
+            masks[vert] = torch.flip(masks[vert], dims=[2])
+            if high_pass is not None:
+                high_pass[vert] = torch.flip(high_pass[vert], dims=[2])
+
+    # Rotations via affine grid (vectorized)
+    if cfg.enable_rotations and cfg.max_rotation_degrees > 0:
+        ang = (_rand_scalar() * 2.0 - 1.0) * cfg.max_rotation_degrees
+        ang_rad = ang * (math.pi / 180.0)
+        non_zero = torch.abs(ang_rad) > 1e-4
+        if non_zero.any():
+            thetas = torch.zeros((B, 2, 3), device=images.device, dtype=images.dtype)
+            cos = torch.cos(ang_rad[non_zero])
+            sin = torch.sin(ang_rad[non_zero])
+            thetas_non = torch.stack([torch.stack([cos, -sin, torch.zeros_like(cos)], dim=1), torch.stack([sin, cos, torch.zeros_like(cos)], dim=1)], dim=1)
+            thetas[non_zero] = thetas_non
+            grid = torch.nn.functional.affine_grid(thetas, images.size(), align_corners=True)
+            images = torch.nn.functional.grid_sample(images, grid, mode="bilinear", padding_mode="reflection", align_corners=True)
+            masks = torch.nn.functional.grid_sample(masks, grid, mode="nearest", padding_mode="zeros", align_corners=True)
+            if high_pass is not None:
+                high_pass = torch.nn.functional.grid_sample(high_pass, grid, mode="bilinear", padding_mode="reflection", align_corners=True)
+
+    # Color jitter (brightness/contrast) vectorized
+    if cfg.enable_color_jitter:
+        brightness_min, brightness_max = getattr(cfg, "brightness_jitter_factors", getattr(cfg, "color_jitter_factors", (0.9, 1.1)))
+        contrast_min, contrast_max = getattr(cfg, "contrast_jitter_factors", (0.9, 1.1))
+        br = brightness_min + _rand_scalar() * (brightness_max - brightness_min)
+        ct = contrast_min + _rand_scalar() * (contrast_max - contrast_min)
+        # reshape for broadcast (B,1,1,1)
+        br = br.view(B, 1, 1, 1)
+        ct = ct.view(B, 1, 1, 1)
+        mean = images.mean(dim=(1, 2, 3), keepdim=True)
+        images = (images - mean) * ct + mean
+        images = images * br
+        images = torch.clamp(images, 0.0, 1.0)
+
+    # Noise
+    if cfg.enable_noise and cfg.noise_std_range[1] > 0:
+        stds = cfg.noise_std_range[0] + _rand_scalar() * (cfg.noise_std_range[1] - cfg.noise_std_range[0])
+        stds = stds.view(B, 1, 1, 1)
+        noise = torch.randn_like(images) * stds
+        images = torch.clamp(images + noise, 0.0, 1.0)
+
+    return images, masks, high_pass
 
 
 def _collate_impl(

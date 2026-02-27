@@ -44,7 +44,14 @@ import sys
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.data.dataloaders import AugmentationConfig, create_dataloaders, load_manifest, _apply_gpu_augmentations, _normalize
+from src.data.dataloaders import (
+    AugmentationConfig,
+    create_dataloaders,
+    load_manifest,
+    _apply_gpu_augmentations,
+    _apply_gpu_augmentations_batch,
+    _normalize,
+)
 from src.model.hybrid_ngiml import HybridNGIML, HybridNGIMLConfig
 from src.model.losses import MultiStageLossConfig, MultiStageManipulationLoss
 
@@ -1130,24 +1137,49 @@ def train_one_epoch(
             datasets_list = batch.get("datasets", None)
             if datasets_list is not None:
                 bsz = images.shape[0]
+                # Group indices by dataset name so we can batch augment per-dataset
+                idxs_by_ds: dict[str, list[int]] = {}
                 for i in range(bsz):
                     ds_name = str(datasets_list[i])
+                    idxs_by_ds.setdefault(ds_name, []).append(i)
+
+                # Use a single generator seeded per-batch for reproducibility
+                gen = gen if 'gen' in locals() else gen
+                for ds_name, idxs in idxs_by_ds.items():
                     aug_cfg = per_dataset_aug.get(ds_name, None)
+                    idx_tensor = torch.tensor(idxs, dtype=torch.long, device=images.device)
                     if aug_cfg is None or not getattr(aug_cfg, "enable", False):
-                        # still ensure normalization is applied on-device
-                        images[i] = _normalize(images[i], normalization_mode, imagenet_mean=imagenet_mean, imagenet_std=imagenet_std)
+                        # Apply normalization on-device in batch
+                        if normalization_mode == "imagenet":
+                            mean = imagenet_mean.view(1, 3, 1, 1)
+                            std = imagenet_std.view(1, 3, 1, 1)
+                            images[idxs] = (images[idxs] - mean) / std
+                        else:
+                            # zero_one or other modes: leave as-is
+                            images[idxs] = images[idxs]
                         continue
 
-                    hp_i = None
+                    # Slice the batch and apply batched augmentations
+                    img_slice = images[idxs]
+                    mask_slice = masks[idxs]
+                    hp_slice = None
                     if high_pass is not None:
-                        hp_i = high_pass[i]
+                        hp_slice = high_pass[idxs]
 
-                    img_i, mask_i, hp_out = _apply_gpu_augmentations(images[i], masks[i], aug_cfg, high_pass=hp_i, generator=gen)
-                    img_i = _normalize(img_i, normalization_mode, imagenet_mean=imagenet_mean, imagenet_std=imagenet_std)
-                    images[i] = img_i
-                    masks[i] = mask_i
+                    img_out, mask_out, hp_out = _apply_gpu_augmentations_batch(
+                        img_slice, mask_slice, aug_cfg, high_pass=hp_slice, generator=gen
+                    )
+
+                    # Apply normalization to the augmented slice
+                    if normalization_mode == "imagenet":
+                        mean = imagenet_mean.view(1, 3, 1, 1)
+                        std = imagenet_std.view(1, 3, 1, 1)
+                        img_out = (img_out - mean) / std
+
+                    images[idxs] = img_out
+                    masks[idxs] = mask_out
                     if hp_out is not None and high_pass is not None:
-                        high_pass[i] = hp_out
+                        high_pass[idxs] = hp_out
             aug_end = time.perf_counter()
         else:
             aug_end = None
