@@ -324,7 +324,7 @@ def build_training_config(
         "early_stopping_min_delta": 1e-4,
         "threshold_metric": "dice",
         "compute_foreground_ratio": True,
-        "auto_pos_weight": True,
+        "auto_pos_weight": False,
         "pos_weight_min": 0.5,
         "pos_weight_max": 8.0,
         "ema_enabled": True,

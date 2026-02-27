@@ -204,7 +204,7 @@ class TrainConfig:
     small_mask_ratio_max: float = 0.01
     medium_mask_ratio_max: float = 0.05
     compute_foreground_ratio: bool = True
-    auto_pos_weight: bool = True
+    auto_pos_weight: bool = False
     pos_weight_min: float = 0.5
     pos_weight_max: float = 20.0
     loss_hybrid_mode: str = "dice_bce"
@@ -368,7 +368,7 @@ def parse_args() -> TrainConfig:
     parser.add_argument("--small-mask-ratio-max", type=float, default=0.01, help="Upper foreground-ratio bound for small-mask validation bin")
     parser.add_argument("--medium-mask-ratio-max", type=float, default=0.05, help="Upper foreground-ratio bound for medium-mask validation bin")
     parser.add_argument("--compute-foreground-ratio", action=argparse.BooleanOptionalAction, default=True, help="Compute foreground pixel ratio from train loader")
-    parser.add_argument("--auto-pos-weight", action=argparse.BooleanOptionalAction, default=True, help="Auto-compute BCE pos_weight from foreground ratio")
+    parser.add_argument("--auto-pos-weight", action=argparse.BooleanOptionalAction, default=False, help="Auto-compute BCE pos_weight from foreground ratio")
     parser.add_argument("--pos-weight-min", type=float, default=1.0, help="Lower clamp for auto pos_weight")
     parser.add_argument("--pos-weight-max", type=float, default=20.0, help="Upper clamp for auto pos_weight")
     parser.add_argument("--loss-hybrid-mode", type=str, default="dice_bce", choices=["dice_bce", "dice_focal"], help="Hybrid loss type")
@@ -1103,7 +1103,17 @@ def train_one_epoch(
     # Wrap loader with prefetcher to overlap host->device copy with GPU compute.
     if device.type == "cuda":
         loader = _PrefetchLoader(loader, device)
-    progress = tqdm(loader, desc=f"Epoch {epoch:03d}", leave=False, dynamic_ncols=True)
+
+    # Try to determine a sensible total for tqdm so it can show progress as "N/M".
+    try:
+        total = len(loader)
+    except Exception:
+        try:
+            total = len(getattr(loader, "dataset", []))
+        except Exception:
+            total = None
+
+    progress = tqdm(loader, desc=f"Epoch {epoch:03d}", leave=False, dynamic_ncols=True, total=total)
     optimizer.zero_grad(set_to_none=True)
     for step, batch in enumerate(progress):
         batch_start = time.perf_counter()
@@ -1582,6 +1592,9 @@ def run_training(cfg: TrainConfig) -> None:
         pos_weight = float(min(max(pos_weight, cfg.pos_weight_min), cfg.pos_weight_max))
         loss_cfg = replace(loss_cfg, pos_weight=pos_weight)
         print(f"Auto pos_weight from foreground ratio: {pos_weight:.4f}")
+    else:
+        # Auto pos weight disabled -> use fixed pos_weight=1.0
+        loss_cfg = replace(loss_cfg, pos_weight=1.0)
     loss_fn = MultiStageManipulationLoss(loss_cfg)
     t_after_model = time.time()
 
