@@ -78,7 +78,7 @@ class AugmentationConfig:
     noise_std_range: Sequence[float] = (0.0, 0.0)
     
     # Multi-scale training
-    multiscale_training: bool = True
+    multiscale_training: bool = False
     multiscale_short_side_range: Sequence[int] = (384, 640)
 
 
