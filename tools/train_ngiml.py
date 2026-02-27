@@ -98,6 +98,16 @@ class _PrefetchLoader:
         torch.cuda.current_stream().wait_stream(self._stream)
         self._next_batch = nxt
 
+    def __len__(self):
+        try:
+            return len(self._loader)
+        except Exception:
+            raise TypeError("wrapped loader has no __len__")
+
+    def __getattr__(self, name: str):
+        # Proxy attribute access to the underlying loader for compatibility
+        return getattr(self._loader, name)
+
 
 
 def _build_lr_scheduler(optimizer, cfg):
