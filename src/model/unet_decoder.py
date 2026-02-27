@@ -67,15 +67,15 @@ class UNetDecoder(nn.Module):
     """
 
     def __init__(self, stage_channels: Sequence[int], config: UNetDecoderConfig | None = None) -> None:
+        super().__init__()
+        self.cfg = config or UNetDecoderConfig()
         self.use_dropout = getattr(self.cfg, 'use_dropout', False)
         self.dropout_p = getattr(self.cfg, 'dropout_p', 0.2)
         if self.use_dropout:
             self.dropout = nn.Dropout2d(self.dropout_p)
-        super().__init__()
         if not stage_channels:
             raise ValueError("stage_channels must contain at least one entry")
         self.stage_channels = tuple(stage_channels)
-        self.cfg = config or UNetDecoderConfig()
 
         if self.cfg.decoder_channels is None:
             decoder_channels = self.stage_channels
