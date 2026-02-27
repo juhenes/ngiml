@@ -154,6 +154,17 @@ class SwinBackbone(nn.Module):
         return normalized
 
     def forward(self, x: Tensor) -> List[Tensor]:
+        # Ensure model is on the same device as input to avoid device/type mismatch
+        try:
+            first_param = next(self.model.parameters())
+            model_dev = first_param.device
+        except StopIteration:
+            model_dev = None
+        if model_dev is not None and model_dev != x.device:
+            _LOG.info("Moving SwinBackbone model from %s to %s", model_dev, x.device)
+            # Move the full module so all parameters/buffers align
+            self.to(x.device)
+
         # Pad input so spatial dimensions are multiples of the Swin patch size
         _, _, h, w = x.shape
         ph, pw = self.patch_size
