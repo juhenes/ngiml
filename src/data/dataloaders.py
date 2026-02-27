@@ -186,11 +186,15 @@ def torchvision_load_image(path: str, as_mask: bool = False) -> torch.Tensor:
 
 
 class PerDatasetDataset(Dataset):
-    def __init__(self, samples: Sequence[SampleRecord], aug_cfg: AugmentationConfig, training: bool) -> None:
+    def __init__(self, samples: Sequence[SampleRecord], aug_cfg: AugmentationConfig, training: bool, max_short_side: int | None = None) -> None:
         self.samples = list(samples)
         self.aug_cfg = aug_cfg
         self.training = training
         self.sample_labels = [int(sample.label) for sample in self.samples]
+        # Optional cap on image short side to avoid extremely large dynamic inputs
+        # (helps prevent oversized backbone inputs that trigger timm assertions
+        # or excessive GPU memory usage). If None, no cap is applied.
+        self.max_short_side = int(max_short_side) if max_short_side is not None else None
 
     def __len__(self) -> int:  # type: ignore[override]
         return len(self.samples)
@@ -209,6 +213,19 @@ class PerDatasetDataset(Dataset):
 
         if mask is None:
             mask = torch.zeros((1, image.shape[-2], image.shape[-1]), dtype=torch.float32)
+
+        # Enforce a maximum short side early to avoid very large dynamic sizes.
+        if self.max_short_side is not None:
+            h, w = image.shape[-2:]
+            short_side = min(h, w)
+            if short_side > self.max_short_side:
+                scale = float(self.max_short_side) / float(short_side)
+                new_h, new_w = max(1, int(round(h * scale))), max(1, int(round(w * scale)))
+                # Resize before any augmentations to keep sizes bounded
+                image = F.resize(image, [new_h, new_w], interpolation=InterpolationMode.BILINEAR)
+                mask = F.resize(mask, [new_h, new_w], interpolation=InterpolationMode.NEAREST)
+                if high_pass is not None:
+                    high_pass = F.resize(high_pass, [new_h, new_w], interpolation=InterpolationMode.BILINEAR)
 
         # --- JPEG compression augmentation ---
         cfg = self.aug_cfg
@@ -804,6 +821,7 @@ def create_dataloaders(
     balanced_positive_ratio: float = 0.5,
     balanced_sampler_seed: int | None = 42,
     balanced_sampler_num_samples: int | None = None,
+    max_short_side: int | None = None,
 ) -> Dict[str, DataLoader]:
     manifest = load_manifest(manifest_path)
     normalization_mode = manifest.normalization_mode
@@ -820,7 +838,9 @@ def create_dataloaders(
         datasets: List[PerDatasetDataset] = []
         for dataset_name, records in per_dataset_records.items():
             aug_cfg = per_dataset_augmentations.get(dataset_name, AugmentationConfig(enable=False))
-            datasets.append(PerDatasetDataset(records, aug_cfg=aug_cfg, training=training))
+            datasets.append(
+                PerDatasetDataset(records, aug_cfg=aug_cfg, training=training, max_short_side=max_short_side)
+            )
 
         if not datasets:
             continue

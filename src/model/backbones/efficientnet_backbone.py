@@ -23,7 +23,8 @@ class EfficientNetBackboneConfig:
     """Configuration container for EfficientNet backbone."""
 
     pretrained: bool = True
-    out_indices: Sequence[int] = (1, 2, 3, 4, 5)
+    # Default to common EfficientNet feature indices for B0-like variants.
+    out_indices: Sequence[int] = (1, 2, 3, 4)
     enforce_input_size: bool = False
     input_size: Union[int, Tuple[int, int], None] = None
 
@@ -59,7 +60,10 @@ class EfficientNetBackbone(nn.Module):
         if not valid_indices:
             valid_indices = tuple(range(avail_n))
         if valid_indices != tuple(requested):
-            _LOG.warning(
+            # Log at INFO to avoid alarming warnings for auto-adjustments; this
+            # is non-fatal and many timm variants expose slightly different
+            # feature index ranges.
+            _LOG.info(
                 "requested efficientnet out_indices %s adjusted to available indices %s for model %s",
                 requested,
                 valid_indices,

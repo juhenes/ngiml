@@ -225,11 +225,15 @@ class SobelBoundaryLoss(nn.Module):
     def forward(self, pred: Tensor, target: Tensor) -> Tensor:
         pred = torch.sigmoid(pred)
         target = target.float()
+        # Ensure sobel kernels match input dtype/device to avoid type-mismatch
+        # errors when using mixed precision (e.g., fp16/bf16).
+        sobel_x = self.sobel_x.to(dtype=pred.dtype, device=pred.device)
+        sobel_y = self.sobel_y.to(dtype=pred.dtype, device=pred.device)
         # Compute gradients
-        grad_pred_x = F.conv2d(pred, self.sobel_x, padding=1)
-        grad_pred_y = F.conv2d(pred, self.sobel_y, padding=1)
-        grad_target_x = F.conv2d(target, self.sobel_x, padding=1)
-        grad_target_y = F.conv2d(target, self.sobel_y, padding=1)
+        grad_pred_x = F.conv2d(pred, sobel_x, padding=1)
+        grad_pred_y = F.conv2d(pred, sobel_y, padding=1)
+        grad_target_x = F.conv2d(target, sobel_x, padding=1)
+        grad_target_y = F.conv2d(target, sobel_y, padding=1)
         grad_pred = torch.sqrt(grad_pred_x ** 2 + grad_pred_y ** 2 + 1e-6)
         grad_target = torch.sqrt(grad_target_x ** 2 + grad_target_y ** 2 + 1e-6)
         return F.l1_loss(grad_pred, grad_target)

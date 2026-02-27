@@ -115,6 +115,9 @@ class TrainConfig:
     local_cache_dir: Optional[str] = None
     reuse_local_cache_manifest: bool = True
     views_per_sample: int = 1
+    # Cap the short side of input images early in the dataloader to avoid
+    # excessive spatial sizes that can trigger timm/Swin assertions or OOMs.
+    max_short_side: int = 640
     max_rotation_degrees: float = 5.0
     noise_std_max: float = 0.02
     disable_aug: bool = False
@@ -468,6 +471,7 @@ def _prepare_dataloaders(cfg: TrainConfig, device: torch.device):
         aug_seed=cfg.aug_seed if cfg.aug_seed is not None else cfg.seed,
         prefetch_factor=cfg.prefetch_factor,
         persistent_workers=cfg.persistent_workers,
+        max_short_side=cfg.max_short_side,
     )
 
 
