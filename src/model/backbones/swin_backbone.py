@@ -7,6 +7,7 @@ from typing import List, Sequence, Tuple
 import logging
 import timm
 import torch
+import torch.nn.functional as NN_F
 from torch import nn, Tensor
 
 _LOG = logging.getLogger(__name__)
@@ -141,6 +142,14 @@ class SwinBackbone(nn.Module):
         return normalized
 
     def forward(self, x: Tensor) -> List[Tensor]:
+        # Pad input so spatial dimensions are multiples of the Swin patch size
+        _, _, h, w = x.shape
+        ph, pw = self.patch_size
+        pad_h = (ph - (h % ph)) % ph
+        pad_w = (pw - (w % pw)) % pw
+        if pad_h or pad_w:
+            x = NN_F.pad(x, (0, pad_w, 0, pad_h), value=0)
+
         self._propagate_spatial_metadata(x.shape[-2], x.shape[-1])
         # Guard timm model internal `out_indices` against invalid values (some timm versions)
         if hasattr(self.model, "feature_info") and hasattr(self.model, "out_indices"):
