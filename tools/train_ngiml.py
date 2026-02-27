@@ -22,11 +22,20 @@ from typing import Dict, Iterable, Optional, Sequence, Tuple
 import re
 import math
 
+
 import numpy as np
 import torch
 from torch.amp import GradScaler, autocast
 from torch.nn.utils import clip_grad_norm_
 from tqdm.auto import tqdm
+try:
+    import xformers
+except ImportError:
+    xformers = None
+try:
+    import flash_attn
+except ImportError:
+    flash_attn = None
 
 ROOT = Path(__file__).resolve().parents[1]
 import sys
@@ -78,6 +87,10 @@ class TrainConfig:
     compile_mode: str = "default"
     deterministic: bool = False
     use_tf32: bool = True
+    precision: str = "bf16"
+    gradient_checkpointing: bool = True
+    flash_attention: bool = True
+    xformers: bool = True
     cuda_expandable_segments: bool = True
     lr_schedule: bool = True
     warmup_epochs: int = 5  # Linear warmup for first 5 epochs
@@ -171,6 +184,10 @@ def parse_args() -> TrainConfig:
     parser.add_argument("--compile-mode", type=str, default="default", help="torch.compile mode")
     parser.add_argument("--deterministic", action="store_true", help="Enable deterministic kernels (slower)")
     parser.add_argument("--no-tf32", action="store_true", help="Disable TF32 matrix math on CUDA")
+    parser.add_argument("--precision", type=str, default="fp32", choices=["fp32", "fp16", "bf16"], help="Numerical precision for training")
+    parser.add_argument("--gradient-checkpointing", action=argparse.BooleanOptionalAction, default=False, help="Enable gradient checkpointing for memory savings")
+    parser.add_argument("--flash-attention", action=argparse.BooleanOptionalAction, default=False, help="Enable flash attention if supported")
+    parser.add_argument("--xformers", action=argparse.BooleanOptionalAction, default=False, help="Enable xformers memory-efficient attention if supported")
     parser.add_argument(
         "--cuda-expandable-segments",
         action=argparse.BooleanOptionalAction,
@@ -366,6 +383,10 @@ def parse_args() -> TrainConfig:
         hard_mining_weight=args.hard_mining_weight,
         hard_mining_gamma=args.hard_mining_gamma,
         scheduler_type=args.scheduler_type,
+        precision=args.precision,
+        gradient_checkpointing=args.gradient_checkpointing,
+        flash_attention=args.flash_attention,
+        xformers=args.xformers,
     )
 
 

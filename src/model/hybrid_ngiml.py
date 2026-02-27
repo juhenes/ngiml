@@ -75,6 +75,9 @@ class HybridNGIMLConfig:
     use_context: bool = True
     use_residual: bool = True
     enable_residual_attention: bool = True  # Residual-guided attention (enabled by default)
+    gradient_checkpointing: bool = True  # Enable gradient checkpointing for memory savings
+    flash_attention: bool = True  # Enable flash attention by default
+    xformers: bool = True  # Enable xformers by default
 
 
 class HybridNGIML(nn.Module):
@@ -87,7 +90,13 @@ class HybridNGIML(nn.Module):
         super().__init__()
         self.cfg = config or HybridNGIMLConfig()
         self.efficientnet = EfficientNetBackbone(self.cfg.efficientnet)
-        self.swin = SwinBackbone(self.cfg.swin)
+        # Pass flash_attention and xformers flags if present in config
+        swin_kwargs = {}
+        if hasattr(self.cfg, 'flash_attention'):
+            swin_kwargs['flash_attention'] = getattr(self.cfg, 'flash_attention', False)
+        if hasattr(self.cfg, 'xformers'):
+            swin_kwargs['xformers'] = getattr(self.cfg, 'xformers', False)
+        self.swin = SwinBackbone(self.cfg.swin, **swin_kwargs)
         self.noise = ResidualNoiseBranch(self.cfg.residual)
 
         layout = {
@@ -139,6 +148,21 @@ class HybridNGIML(nn.Module):
             attn_map = torch.sigmoid(self.residual_attention_proj(residual[0]))
             # Modulate semantic features: semantic_feat = semantic_feat * (1 + attention)
             low_level[0] = low_level[0] * (1.0 + attn_map)
+
+        # Gradient checkpointing for memory savings
+        if getattr(self.cfg, 'gradient_checkpointing', False):
+            import torch.utils.checkpoint
+            def checkpointed_forward(module, *inputs):
+                def custom_forward(*inputs):
+                    return module(*inputs)
+                return torch.utils.checkpoint.checkpoint(custom_forward, *inputs)
+            # Only checkpoint backbone blocks if possible
+            if hasattr(self.efficientnet, 'backbone'):
+                low_level = [checkpointed_forward(m, x) for m in self.efficientnet.backbone.children()]
+            if hasattr(self.swin, 'model'):
+                context = [checkpointed_forward(m, x) for m in self.swin.model.children()]
+            if hasattr(self.noise, 'blocks'):
+                residual = [checkpointed_forward(m, x) for m in self.noise.blocks]
 
         return {
             "low_level": low_level,

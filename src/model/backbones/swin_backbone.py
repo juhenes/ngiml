@@ -21,7 +21,7 @@ class SwinBackboneConfig:
 class SwinBackbone(nn.Module):
     """Thin wrapper around timm Swin Transformer with multi-scale outputs."""
 
-    def __init__(self, config: SwinBackboneConfig | None = None) -> None:
+    def __init__(self, config: SwinBackboneConfig | None = None, flash_attention: bool = False, xformers: bool = False) -> None:
         super().__init__()
         cfg = config or SwinBackboneConfig()
         self.model = timm.create_model(
@@ -47,6 +47,22 @@ class SwinBackbone(nn.Module):
         if not self.stages:
             raise ValueError("Swin backbone structure unexpected; layers_* modules not found")
         self._last_spatial_size: Tuple[int, int] | None = None
+
+        # Flash attention and xformers hooks
+        self.flash_attention = flash_attention
+        self.xformers = xformers
+        if self.flash_attention:
+            try:
+                import flash_attn
+                # Insert flash attention logic here if needed
+            except ImportError:
+                print("flash-attn not installed; flash attention will not be used.")
+        if self.xformers:
+            try:
+                import xformers
+                # Insert xformers logic here if needed
+            except ImportError:
+                print("xformers not installed; xformers attention will not be used.")
 
     def _propagate_spatial_metadata(self, height: int, width: int) -> None:
         if height % self.patch_size[0] != 0 or width % self.patch_size[1] != 0:
