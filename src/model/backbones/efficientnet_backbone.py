@@ -63,6 +63,17 @@ class EfficientNetBackbone(nn.Module):
         """Return multi-scale feature maps."""
         if self.enforce_input_size and x.shape[-2:] != self.expected_hw:
             x = F.interpolate(x, size=self.expected_hw, mode="bilinear", align_corners=False)
+        # Guard timm model `out_indices` attribute to avoid internal index errors
+        if hasattr(self.backbone, "feature_info") and hasattr(self.backbone, "out_indices"):
+            avail = len(self.backbone.feature_info)
+            safe_out = tuple(i for i in self.selected_indices if 0 <= i < avail)
+            if not safe_out:
+                safe_out = tuple(range(avail))
+            try:
+                self.backbone.out_indices = safe_out
+            except Exception:
+                pass
+
         features = self.backbone(x)
         # Select only the requested feature maps and return as list
         if isinstance(features, (list, tuple)):

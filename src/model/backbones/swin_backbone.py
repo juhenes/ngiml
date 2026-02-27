@@ -134,6 +134,17 @@ class SwinBackbone(nn.Module):
 
     def forward(self, x: Tensor) -> List[Tensor]:
         self._propagate_spatial_metadata(x.shape[-2], x.shape[-1])
+        # Guard timm model internal `out_indices` against invalid values (some timm versions)
+        if hasattr(self.model, "feature_info") and hasattr(self.model, "out_indices"):
+            avail = len(self.model.feature_info)
+            safe_out = tuple(i for i in self.selected_indices if 0 <= i < avail)
+            if not safe_out:
+                safe_out = tuple(range(avail))
+            try:
+                self.model.out_indices = safe_out
+            except Exception:
+                pass
+
         features = self.model(x)
         # Select only the requested feature maps
         selected = [features[i] for i in self.selected_indices]
