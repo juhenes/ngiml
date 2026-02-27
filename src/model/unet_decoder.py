@@ -155,6 +155,12 @@ class UNetDecoder(nn.Module):
                 grad_y = F.conv2d(gray, self.sobel_y, padding=1)
                 edge_mag = torch.sqrt(grad_x ** 2 + grad_y ** 2 + 1e-6)
             edge_proj = self.edge_proj(edge_mag)
+            # Ensure edge projection spatial size matches the highest-res
+            # decoder feature before addition (avoid mismatched dimensions).
+            if edge_proj.shape[-2:] != projected[0].shape[-2:]:
+                edge_proj = F.interpolate(
+                    edge_proj, size=projected[0].shape[-2:], mode="bilinear", align_corners=False
+                )
             projected[0] = projected[0] + edge_proj
 
         x = self.bottleneck(projected[-1])
