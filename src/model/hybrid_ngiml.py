@@ -146,6 +146,10 @@ class HybridNGIML(nn.Module):
         if self.enable_residual_attention and isinstance(low_level, list) and isinstance(residual, list):
             # Use highest-resolution features (stage 0)
             attn_map = torch.sigmoid(self.residual_attention_proj(residual[0]))
+            # Upsample attention map to match semantic feature spatial dims if needed
+            sem_h, sem_w = low_level[0].shape[-2:]
+            if attn_map.shape[-2:] != (sem_h, sem_w):
+                attn_map = F.interpolate(attn_map, size=(sem_h, sem_w), mode="bilinear", align_corners=False)
             # Modulate semantic features: semantic_feat = semantic_feat * (1 + attention)
             low_level[0] = low_level[0] * (1.0 + attn_map)
 
