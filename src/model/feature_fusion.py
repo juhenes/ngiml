@@ -143,13 +143,14 @@ class _AdaptiveFusionStage(nn.Module):
             # creating large intermediate Python floats and to enable in-place
             # accumulation which reduces peak memory.
             if fused is None:
-                fused = torch.zeros_like(proj)
-                weight_sum = torch.zeros_like(proj)
-
-            # Multiply in-place into proj tensor to avoid allocating proj * gate
-            torch.mul(proj, gate, out=proj)
-            fused.add_(proj)
-            weight_sum.add_(gate)
+                # Initialize accumulators as regular tensors (not in-place) so
+                # autograd can track operations correctly.
+                fused = proj * gate
+                weight_sum = gate
+            else:
+                prod = proj * gate
+                fused = fused + prod
+                weight_sum = weight_sum + gate
 
         fused = fused / (weight_sum + eps)
         fused = self.refine(fused)
