@@ -36,11 +36,10 @@ class SwinBackbone(nn.Module):
             print(
                 f"Warning: requested swin out_indices {requested} adjusted to available indices {valid_indices} for model {cfg.model_name}"
             )
-        # Recreate model with validated out_indices to ensure forward returns expected maps
-        self.model = timm.create_model(
-            cfg.model_name, pretrained=cfg.pretrained, features_only=True, out_indices=valid_indices
-        )
-        self.out_channels: List[int] = [self.model.feature_info[i]["num_chs"] for i in valid_indices]
+        # Use model without forcing out_indices to avoid timm internal mismatches.
+        # We'll select the desired feature maps from the returned feature list.
+        self.selected_indices = valid_indices
+        self.out_channels: List[int] = [self.model.feature_info[i]["num_chs"] for i in self.selected_indices]
         patch = getattr(self.model, "patch_embed", None)
         if patch is None:
             raise ValueError("Swin backbone missing patch_embed; ensure model_name is a Swin variant")
@@ -136,7 +135,9 @@ class SwinBackbone(nn.Module):
     def forward(self, x: Tensor) -> List[Tensor]:
         self._propagate_spatial_metadata(x.shape[-2], x.shape[-1])
         features = self.model(x)
-        return self._ensure_channels_first(features)
+        # Select only the requested feature maps
+        selected = [features[i] for i in self.selected_indices]
+        return self._ensure_channels_first(selected)
 
 
 __all__ = ["SwinBackbone", "SwinBackboneConfig"]
