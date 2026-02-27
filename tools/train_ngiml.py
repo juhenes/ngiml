@@ -218,6 +218,7 @@ class TrainConfig:
     per_dataset_aug: Optional[Dict[str, AugmentationConfig]] = None
     model_config: Optional[HybridNGIMLConfig] = None
     loss_config: Optional[MultiStageLossConfig] = None
+    debug_timing: bool = False
 
 
 @dataclass
@@ -252,6 +253,7 @@ def parse_args() -> TrainConfig:
     parser.add_argument("--deterministic", action="store_true", help="Enable deterministic kernels (slower)")
     parser.add_argument("--no-tf32", action="store_true", help="Disable TF32 matrix math on CUDA")
     parser.add_argument("--precision", type=str, default="bf16", choices=["fp32", "fp16", "bf16"], help="Numerical precision for training")
+    parser.add_argument("--debug-timing", action="store_true", help="Enable lightweight per-stage timing prints during training")
     parser.add_argument("--gradient-checkpointing", action=argparse.BooleanOptionalAction, default=False, help="Enable gradient checkpointing for memory savings")
     parser.add_argument("--flash-attention", action=argparse.BooleanOptionalAction, default=False, help="Enable flash attention if supported")
     parser.add_argument("--xformers", action=argparse.BooleanOptionalAction, default=False, help="Enable xformers memory-efficient attention if supported")
@@ -1097,6 +1099,7 @@ def train_one_epoch(
     progress = tqdm(loader, desc=f"Epoch {epoch:03d}", leave=False, dynamic_ncols=True)
     optimizer.zero_grad(set_to_none=True)
     for step, batch in enumerate(progress):
+        batch_start = time.perf_counter()
         images = batch["images"].to(device, non_blocking=True)
         masks = batch["masks"].to(device, non_blocking=True)
         high_pass = batch.get("high_pass")
@@ -1105,7 +1108,12 @@ def train_one_epoch(
         else:
             high_pass = None
         # Apply GPU-side augmentations and normalization when requested.
+        aug_start = None
+        forward_start = None
+        backward_end = None
+        opt_end = None
         if device.type == "cuda" and per_dataset_aug is not None and normalization_mode is not None:
+            aug_start = time.perf_counter()
             try:
                 gen = torch.Generator(device=device)
             except TypeError:
@@ -1140,6 +1148,9 @@ def train_one_epoch(
                     masks[i] = mask_i
                     if hp_out is not None and high_pass is not None:
                         high_pass[i] = hp_out
+            aug_end = time.perf_counter()
+        else:
+            aug_end = None
         labels = batch["labels"]
         pos_count, total_count = _to_float_label_ratio(labels)
         sampled_pos += pos_count
@@ -1153,38 +1164,45 @@ def train_one_epoch(
         amp_dtype = torch.bfloat16 if precision_name == "bf16" else (torch.float16 if precision_name == "fp16" else None)
         use_amp = cfg.amp and device.type == "cuda" and (amp_dtype is not None)
         if amp_dtype is not None:
+            forward_start = time.perf_counter()
             with autocast(device_type=device.type, dtype=amp_dtype, enabled=use_amp):
                 preds = model(images, target_size=masks.shape[-2:], high_pass=high_pass)
                 loss = loss_fn(preds, masks)
+            forward_end = time.perf_counter()
+        else:
+            forward_start = time.perf_counter()
+            preds = model(images, target_size=masks.shape[-2:], high_pass=high_pass)
+            loss = loss_fn(preds, masks)
+            forward_end = time.perf_counter()
 
-                if cfg.hard_mining_enabled and epoch >= int(max(0, cfg.hard_mining_start_epoch)):
-                    final_logits = preds[-1]
-                    if final_logits.shape[-2:] != masks.shape[-2:]:
-                        final_logits = torch.nn.functional.interpolate(
-                            final_logits,
-                            size=masks.shape[-2:],
-                            mode="bilinear",
-                            align_corners=False,
-                        )
+        if cfg.hard_mining_enabled and epoch >= int(max(0, cfg.hard_mining_start_epoch)):
+            final_logits = preds[-1]
+            if final_logits.shape[-2:] != masks.shape[-2:]:
+                final_logits = torch.nn.functional.interpolate(
+                    final_logits,
+                    size=masks.shape[-2:],
+                    mode="bilinear",
+                    align_corners=False,
+                )
 
-                    bce_per_sample = torch.nn.functional.binary_cross_entropy_with_logits(
-                        final_logits,
-                        masks,
-                        reduction="none",
-                    ).mean(dim=(1, 2, 3))
+            bce_per_sample = torch.nn.functional.binary_cross_entropy_with_logits(
+                final_logits,
+                masks,
+                reduction="none",
+            ).mean(dim=(1, 2, 3))
 
-                    with torch.no_grad():
-                        pred_bin = (torch.sigmoid(final_logits) >= 0.5).float()
-                        tp = (pred_bin * masks).sum(dim=(1, 2, 3))
-                        fp = (pred_bin * (1.0 - masks)).sum(dim=(1, 2, 3))
-                        fn = ((1.0 - pred_bin) * masks).sum(dim=(1, 2, 3))
-                        iou = (tp + 1e-6) / (tp + fp + fn + 1e-6)
-                        difficulty = (1.0 - iou).clamp(0.0, 1.0)
-                        hard_weights = 1.0 + float(max(0.0, cfg.hard_mining_gamma)) * difficulty
-                        hard_weights = hard_weights / hard_weights.mean().clamp_min(1e-6)
+            with torch.no_grad():
+                pred_bin = (torch.sigmoid(final_logits) >= 0.5).float()
+                tp = (pred_bin * masks).sum(dim=(1, 2, 3))
+                fp = (pred_bin * (1.0 - masks)).sum(dim=(1, 2, 3))
+                fn = ((1.0 - pred_bin) * masks).sum(dim=(1, 2, 3))
+                iou = (tp + 1e-6) / (tp + fp + fn + 1e-6)
+                difficulty = (1.0 - iou).clamp(0.0, 1.0)
+                hard_weights = 1.0 + float(max(0.0, cfg.hard_mining_gamma)) * difficulty
+                hard_weights = hard_weights / hard_weights.mean().clamp_min(1e-6)
 
-                    hard_loss = (hard_weights * bce_per_sample).mean()
-                    loss = loss + float(max(0.0, cfg.hard_mining_weight)) * hard_loss
+            hard_loss = (hard_weights * bce_per_sample).mean()
+            loss = loss + float(max(0.0, cfg.hard_mining_weight)) * hard_loss
         else:
             preds = model(images, target_size=masks.shape[-2:], high_pass=high_pass)
             loss = loss_fn(preds, masks)
@@ -1219,7 +1237,9 @@ def train_one_epoch(
                 loss = loss + float(max(0.0, cfg.hard_mining_weight)) * hard_loss
 
         scaled_loss = loss / accum_steps
+        backward_start = time.perf_counter()
         scaler.scale(scaled_loss).backward()
+        backward_end = time.perf_counter()
 
         do_step = ((step + 1) % accum_steps == 0) or ((step + 1) == len(loader))
 
@@ -1227,15 +1247,28 @@ def train_one_epoch(
             if cfg.grad_clip and cfg.grad_clip > 0:
                 scaler.unscale_(optimizer)
                 clip_grad_norm_(model.parameters(), cfg.grad_clip)
-
             scaler.step(optimizer)
             scaler.update()
+            opt_end = time.perf_counter()
             optimizer.zero_grad(set_to_none=True)
             _update_ema_model(ema_model, model, cfg.ema_decay)
 
         running_loss += loss.item()
         num_batches += 1
         global_step += 1
+
+        # Record timings if enabled
+        if cfg.debug_timing:
+            batch_end = time.perf_counter()
+            batch_time = batch_end - batch_start
+            aug_time = (aug_end - aug_start) if (aug_start is not None and aug_end is not None) else 0.0
+            forward_time = (forward_end - forward_start) if (forward_start is not None and forward_end is not None) else 0.0
+            backward_time = (backward_end - backward_start) if (backward_end is not None and backward_start is not None) else 0.0
+            opt_time = (opt_end - backward_end) if (opt_end is not None and backward_end is not None) else 0.0
+            if num_batches % 50 == 0 or num_batches == 1:
+                print(
+                    f"[timing] batch={num_batches} total={batch_time:.3f}s aug={aug_time:.3f}s forward={forward_time:.3f}s backward={backward_time:.3f}s opt={opt_time:.3f}s"
+                )
 
         avg_loss = running_loss / max(1, num_batches)
         progress.set_postfix(loss=f"{avg_loss:.4f}", step=f"{step:05d}", accum=f"{accum_steps}")
