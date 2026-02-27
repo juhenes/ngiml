@@ -705,6 +705,54 @@ def _collate_builder(
                 if collect_high_pass and view_high_pass is not None:
                     high_passes.append(view_high_pass)
 
+        # Ensure all images/masks/high_pass tensors have the same H,W before stacking.
+        # Pad to the maximum H,W in the batch (pad on right and bottom).
+        shapes = [img.shape for img in images]
+        need_pad = any(s != shapes[0] for s in shapes)
+
+        if need_pad:
+            max_c = max(s[0] for s in shapes)
+            max_h = max(s[1] for s in shapes)
+            max_w = max(s[2] for s in shapes)
+
+            padded_images: List[torch.Tensor] = []
+            padded_masks: List[torch.Tensor] = []
+            for img, m in zip(images, masks):
+                c, h, w = img.shape
+                # pad channels if necessary (unlikely)
+                if c < max_c:
+                    pad_ch = max_c - c
+                    img = torch.cat([img, torch.zeros((pad_ch, h, w), dtype=img.dtype, device=img.device)], dim=0)
+
+                pad_w = max_w - w
+                pad_h = max_h - h
+                if pad_w or pad_h:
+                    img = NN_F.pad(img, (0, pad_w, 0, pad_h), value=0)
+                # handle missing masks (create zero mask)
+                if m is None:
+                    m = torch.zeros((1, h, w), dtype=torch.float32, device=img.device)
+                else:
+                    mc, mh, mw = m.shape
+                    if (mh != max_h) or (mw != max_w):
+                        m = NN_F.pad(m, (0, pad_w, 0, pad_h), value=0)
+
+                padded_images.append(img)
+                padded_masks.append(m)
+
+            images = padded_images
+            masks = padded_masks
+
+            if collect_high_pass and high_passes:
+                padded_high: List[torch.Tensor] = []
+                for hp in high_passes:
+                    hc, hh, hw = hp.shape
+                    ph = max_h - hh
+                    pw = max_w - hw
+                    if ph or pw:
+                        hp = NN_F.pad(hp, (0, pw, 0, ph), value=0)
+                    padded_high.append(hp)
+                high_passes = padded_high
+
         batch_dict = {
             "images": torch.stack(images, dim=0),
             "masks": torch.stack(masks, dim=0),
