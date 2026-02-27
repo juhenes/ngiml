@@ -333,10 +333,10 @@ def build_training_config(
         "hard_mining_start_epoch": 3,
         "hard_mining_weight": 0.1,
         "hard_mining_gamma": 1.0,
-        "default_aug": AugmentationConfig,
+        "default_aug": default_aug,
         "per_dataset_aug": per_dataset_aug,
-        "model_config": HybridNGIMLConfig,
-        "loss_config": MultiStageLossConfig,
+        "model_config": model_cfg,
+        "loss_config": loss_cfg,
     }
 
 
