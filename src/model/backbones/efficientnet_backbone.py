@@ -7,10 +7,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence, List, Tuple, Union
 
+import logging
 import torch
 from torch import nn
 import torch.nn.functional as F
 import timm
+
+_LOG = logging.getLogger(__name__)
+# Reduce noisy pretrained-weight mismatch warnings from timm internals
+logging.getLogger("timm.models._builder").setLevel(logging.ERROR)
 
 
 @dataclass
@@ -54,7 +59,12 @@ class EfficientNetBackbone(nn.Module):
         if not valid_indices:
             valid_indices = tuple(range(avail_n))
         if valid_indices != tuple(requested):
-            print(f"Warning: requested efficientnet out_indices {requested} adjusted to available indices {valid_indices} for model {model_name}")
+            _LOG.warning(
+                "requested efficientnet out_indices %s adjusted to available indices %s for model %s",
+                requested,
+                valid_indices,
+                model_name,
+            )
         self.selected_indices = valid_indices
         # Cache channel dimensions for downstream heads corresponding to selected indices
         self.out_channels: List[int] = [self.backbone.feature_info[i]['num_chs'] for i in self.selected_indices]

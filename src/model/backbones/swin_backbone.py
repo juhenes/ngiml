@@ -4,9 +4,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Sequence, Tuple
 
+import logging
 import timm
 import torch
 from torch import nn, Tensor
+
+_LOG = logging.getLogger(__name__)
+# Reduce noisy pretrained-weight mismatch warnings from timm internals
+logging.getLogger("timm.models._builder").setLevel(logging.ERROR)
 
 
 @dataclass
@@ -33,8 +38,11 @@ class SwinBackbone(nn.Module):
         if not valid_indices:
             valid_indices = tuple(range(avail_n))
         if valid_indices != tuple(requested):
-            print(
-                f"Warning: requested swin out_indices {requested} adjusted to available indices {valid_indices} for model {cfg.model_name}"
+            _LOG.warning(
+                "requested swin out_indices %s adjusted to available indices %s for model %s",
+                requested,
+                valid_indices,
+                cfg.model_name,
             )
         # Use model without forcing out_indices to avoid timm internal mismatches.
         # We'll select the desired feature maps from the returned feature list.
@@ -62,16 +70,16 @@ class SwinBackbone(nn.Module):
         self.xformers = xformers
         if self.flash_attention:
             try:
-                import flash_attn
+                import flash_attn  # type: ignore
                 # Insert flash attention logic here if needed
             except ImportError:
-                print("flash-attn not installed; flash attention will not be used.")
+                _LOG.info("flash-attn not installed; flash attention will not be used.")
         if self.xformers:
             try:
-                import xformers
+                import xformers  # type: ignore
                 # Insert xformers logic here if needed
             except ImportError:
-                print("xformers not installed; xformers attention will not be used.")
+                _LOG.info("xformers not installed; xformers attention will not be used.")
 
     def _propagate_spatial_metadata(self, height: int, width: int) -> None:
         if height % self.patch_size[0] != 0 or width % self.patch_size[1] != 0:
