@@ -678,14 +678,23 @@ def find_latest_checkpoint(output_dir: Path) -> Optional[Path]:
 
 
 @torch.inference_mode()
-def compute_foreground_pixel_ratio(loader) -> float:
+def compute_foreground_pixel_ratio(loader, max_batches: int | None = 200) -> float:
+    """Compute foreground pixel ratio with optional batch sampling and progress prints.
+
+    This avoids iterating the entire dataset in slow or memory-constrained environments.
+    """
     foreground = 0.0
     total = 0.0
-    for batch in loader:
+    for i, batch in enumerate(loader):
         masks = batch["masks"]
         masks = (masks > 0.5).float()
         foreground += float(masks.sum().item())
         total += float(masks.numel())
+        if (i + 1) % 10 == 0:
+            print(f"Foreground sampling: processed {i+1} batches")
+        if max_batches is not None and (i + 1) >= int(max_batches):
+            print(f"Foreground sampling: reached max_batches={max_batches}, stopping early")
+            break
     if total <= 0:
         return 0.0
     return foreground / total
@@ -1286,7 +1295,8 @@ def run_training(cfg: TrainConfig) -> None:
 
     foreground_ratio = None
     if cfg.compute_foreground_ratio:
-        foreground_ratio = compute_foreground_pixel_ratio(loaders["train"])
+        print("Computing foreground pixel ratio (sampling up to 200 batches)...")
+        foreground_ratio = compute_foreground_pixel_ratio(loaders["train"], max_batches=200)
         print(f"Foreground pixel ratio (train): {foreground_ratio:.6f}")
 
     model_cfg = cfg.model_config or HybridNGIMLConfig()
