@@ -56,7 +56,7 @@ class HybridNGIMLOptimizerConfig:
     decoder: OptimizerGroupConfig = field(default_factory=_default_decoder_optim)
     betas: Tuple[float, float] = (0.9, 0.999)
     eps: float = 1e-8
-    freeze_backbone_epochs: int = 5
+    freeze_backbone_epochs: int = 1
 
 
 @dataclass

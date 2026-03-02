@@ -196,7 +196,7 @@ class TrainConfig:
     device: Optional[str] = None
     aug_seed: Optional[int] = None
     seed: int = 42
-    early_stopping_patience: int = 5
+    early_stopping_patience: int = 12
     early_stopping_min_delta: float = 1e-4
     early_stopping_monitor: str = "iou"
     metric_threshold: float = 0.5
@@ -210,9 +210,10 @@ class TrainConfig:
     compute_foreground_ratio: bool = True
     foreground_ratio_max_batches: int = 40
     short_side_probe_samples: int = 128
-    auto_pos_weight: bool = False
+    auto_pos_weight: bool = True
     pos_weight_min: float = 0.5
     pos_weight_max: float = 20.0
+    balanced_pos_weight_cap: float = 6.0
     loss_hybrid_mode: str = "dice_bce"
     dice_weight: float = 1.0
     bce_weight: float = 1.0
@@ -224,9 +225,9 @@ class TrainConfig:
     lovasz_weight: float = 0.5
     ema_enabled: bool = True
     ema_decay: float = 0.999
-    hard_mining_enabled: bool = True
-    hard_mining_start_epoch: int = 3
-    hard_mining_weight: float = 0.2
+    hard_mining_enabled: bool = False
+    hard_mining_start_epoch: int = 8
+    hard_mining_weight: float = 0.05
     hard_mining_gamma: float = 2.0
     default_aug: Optional[AugmentationConfig] = None
     per_dataset_aug: Optional[Dict[str, AugmentationConfig]] = None
@@ -364,7 +365,7 @@ def parse_args() -> TrainConfig:
     parser.add_argument("--disable-aug", action="store_true", help="Disable GPU augmentations")
     parser.add_argument("--device", type=str, default=None, help="Override device (e.g., cuda:0 or cpu)")
     parser.add_argument("--seed", type=int, default=42, help="Global random seed for reproducibility")
-    parser.add_argument("--early-stopping-patience", type=int, default=5, help="Stop after N validations without improvement; <=0 disables")
+    parser.add_argument("--early-stopping-patience", type=int, default=12, help="Stop after N validations without improvement; <=0 disables")
     parser.add_argument("--early-stopping-min-delta", type=float, default=1e-4, help="Minimum monitored-metric improvement to reset early stopping")
     parser.add_argument("--early-stopping-monitor", type=str, default="iou", choices=["iou", "dice", "recall", "precision", "accuracy", "loss"], help="Validation metric used for early stopping and best checkpoint")
     parser.add_argument("--metric-threshold", type=float, default=0.5, help="Fixed threshold for sigmoid outputs when threshold optimization is disabled")
@@ -388,9 +389,15 @@ def parse_args() -> TrainConfig:
         default=128,
         help="Max samples per split to probe on disk for size bucketing (0 disables probing)",
     )
-    parser.add_argument("--auto-pos-weight", action=argparse.BooleanOptionalAction, default=False, help="Auto-compute BCE pos_weight from foreground ratio")
-    parser.add_argument("--pos-weight-min", type=float, default=1.0, help="Lower clamp for auto pos_weight")
+    parser.add_argument("--auto-pos-weight", action=argparse.BooleanOptionalAction, default=True, help="Auto-compute BCE pos_weight from foreground ratio")
+    parser.add_argument("--pos-weight-min", type=float, default=0.5, help="Lower clamp for auto pos_weight")
     parser.add_argument("--pos-weight-max", type=float, default=20.0, help="Upper clamp for auto pos_weight")
+    parser.add_argument(
+        "--balanced-pos-weight-cap",
+        type=float,
+        default=6.0,
+        help="When --balance-real-fake is enabled, cap auto pos_weight to this value (<=0 disables cap)",
+    )
     parser.add_argument("--loss-hybrid-mode", type=str, default="dice_bce", choices=["dice_bce", "dice_focal"], help="Hybrid loss type")
     parser.add_argument("--dice-weight", type=float, default=1.0, help="Dice loss weight")
     parser.add_argument("--bce-weight", type=float, default=1.0, help="BCE/Focal term weight in hybrid loss")
@@ -402,9 +409,9 @@ def parse_args() -> TrainConfig:
     parser.add_argument("--lovasz-weight", type=float, default=0.5, help="Lovasz Hinge Loss weight for IoU optimization")
     parser.add_argument("--ema-enabled", action=argparse.BooleanOptionalAction, default=True, help="Use EMA weights for validation and best checkpoints")
     parser.add_argument("--ema-decay", type=float, default=0.999, help="EMA decay factor")
-    parser.add_argument("--hard-mining-enabled", action=argparse.BooleanOptionalAction, default=True, help="Enable low-IoU hard-example weighting")
-    parser.add_argument("--hard-mining-start-epoch", type=int, default=2, help="Epoch to start hard-example weighting")
-    parser.add_argument("--hard-mining-weight", type=float, default=0.2, help="Weight of hard-example auxiliary loss")
+    parser.add_argument("--hard-mining-enabled", action=argparse.BooleanOptionalAction, default=False, help="Enable low-IoU hard-example weighting")
+    parser.add_argument("--hard-mining-start-epoch", type=int, default=8, help="Epoch to start hard-example weighting")
+    parser.add_argument("--hard-mining-weight", type=float, default=0.05, help="Weight of hard-example auxiliary loss")
     parser.add_argument("--hard-mining-gamma", type=float, default=2.0, help="Scale for low-IoU hard-example weights")
     args = parser.parse_args()
     return TrainConfig(
@@ -466,6 +473,7 @@ def parse_args() -> TrainConfig:
         auto_pos_weight=args.auto_pos_weight,
         pos_weight_min=args.pos_weight_min,
         pos_weight_max=args.pos_weight_max,
+        balanced_pos_weight_cap=args.balanced_pos_weight_cap,
         loss_hybrid_mode=args.loss_hybrid_mode,
         dice_weight=args.dice_weight,
         bce_weight=args.bce_weight,
@@ -1683,13 +1691,15 @@ def run_training(cfg: TrainConfig) -> None:
         pos_weight = (1.0 - ratio) / ratio
         pos_weight = float(min(max(pos_weight, cfg.pos_weight_min), cfg.pos_weight_max))
         if cfg.balance_real_fake:
-            capped = min(pos_weight, 2.0)
-            if capped < pos_weight:
-                print(
-                    "Balanced class sampling is enabled; capping auto pos_weight "
-                    f"from {pos_weight:.4f} to {capped:.4f} to reduce foreground overprediction"
-                )
-            pos_weight = capped
+            cap = float(getattr(cfg, "balanced_pos_weight_cap", 0.0))
+            if cap > 0:
+                capped = min(pos_weight, cap)
+                if capped < pos_weight:
+                    print(
+                        "Balanced class sampling is enabled; capping auto pos_weight "
+                        f"from {pos_weight:.4f} to {capped:.4f}"
+                    )
+                pos_weight = capped
         loss_cfg = replace(loss_cfg, pos_weight=pos_weight)
         print(f"Auto pos_weight from foreground ratio: {pos_weight:.4f}")
     else:
