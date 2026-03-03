@@ -1807,7 +1807,9 @@ def run_training(cfg: TrainConfig) -> None:
         ema_model = ema_model.to(device)
         if cfg.channels_last and device.type == "cuda":
             ema_model = ema_model.to(memory_format=torch.channels_last)
-    loss_cfg = cfg.loss_config or MultiStageLossConfig(
+    base_loss_cfg = cfg.loss_config or MultiStageLossConfig()
+    loss_cfg = replace(
+        base_loss_cfg,
         hybrid_mode=cfg.loss_hybrid_mode,
         dice_weight=cfg.dice_weight,
         bce_weight=cfg.bce_weight,

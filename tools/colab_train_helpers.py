@@ -232,11 +232,11 @@ def build_default_components():
         fusion=FeatureFusionConfig(fusion_channels=(64, 128, 192, 256)),
         decoder=UNetDecoderConfig(decoder_channels=None, out_channels=1, per_stage_heads=True),
         optimizer=HybridNGIMLOptimizerConfig(
-            efficientnet=OptimizerGroupConfig(lr=1.6e-5, weight_decay=1e-4),
-            swin=OptimizerGroupConfig(lr=8e-6, weight_decay=5e-5),
-            residual=OptimizerGroupConfig(lr=1.6e-4, weight_decay=1e-4),
-            fusion=OptimizerGroupConfig(lr=1.6e-4, weight_decay=1e-4),
-            decoder=OptimizerGroupConfig(lr=2e-4, weight_decay=1e-4),
+            efficientnet=OptimizerGroupConfig(lr=1e-5, weight_decay=1.5e-4),
+            swin=OptimizerGroupConfig(lr=5e-6, weight_decay=1e-4),
+            residual=OptimizerGroupConfig(lr=2.5e-4, weight_decay=2e-4),
+            fusion=OptimizerGroupConfig(lr=1.2e-4, weight_decay=2e-4),
+            decoder=OptimizerGroupConfig(lr=1.8e-4, weight_decay=2e-4),
         ),
         use_low_level=True,
         use_context=True,
@@ -249,17 +249,24 @@ def build_default_components():
         pos_weight=1.0,
         stage_weights=[0.05, 0.1, 0.2, 1.0],
         smooth=1e-6,
+        hybrid_mode="dice_bce",
+        tversky_weight=0.1,
+        tversky_alpha=0.3,
+        tversky_beta=0.8,
+        lovasz_weight=0.15,
+        use_boundary_loss=False,
+        boundary_weight=0.05,
     )
 
     default_aug = AugmentationConfig(
         enable=True,
-        views_per_sample=1,
+        views_per_sample=2,
         enable_flips=True,
         enable_rotations=True,
         max_rotation_degrees=5.0,
         enable_random_crop=True,
-        crop_scale_range=(0.9, 1.0),
-        object_crop_bias_prob=0.75,
+        crop_scale_range=(0.75, 1.0),
+        object_crop_bias_prob=0.85,
         min_fg_pixels_for_object_crop=8,
         multiscale_training=False,
         multiscale_short_side_range=(384, 640),
@@ -315,10 +322,12 @@ def build_training_config(
     effective_bce_weight = float(getattr(loss_cfg, "bce_weight", 1.0))
     effective_focal_gamma = float(getattr(loss_cfg, "focal_gamma", 2.0))
     effective_focal_alpha = float(getattr(loss_cfg, "focal_alpha", 0.25))
-    effective_tversky_weight = float(getattr(loss_cfg, "tversky_weight", 0.0))
+    effective_tversky_weight = float(getattr(loss_cfg, "tversky_weight", 0.1))
     effective_tversky_alpha = float(getattr(loss_cfg, "tversky_alpha", 0.3))
-    effective_tversky_beta = float(getattr(loss_cfg, "tversky_beta", 0.7))
-    effective_lovasz_weight = float(getattr(loss_cfg, "lovasz_weight", 0.0))
+    effective_tversky_beta = float(getattr(loss_cfg, "tversky_beta", 0.8))
+    effective_lovasz_weight = float(getattr(loss_cfg, "lovasz_weight", 0.15))
+    effective_use_boundary_loss = bool(getattr(loss_cfg, "use_boundary_loss", False))
+    effective_boundary_weight = float(getattr(loss_cfg, "boundary_weight", 0.05))
 
     return {
         "manifest": str(manifest_path),
@@ -338,7 +347,7 @@ def build_training_config(
         "prefetch_factor": 2,
         "persistent_workers": False,
         "drop_last": True,
-        "views_per_sample": 1,
+        "views_per_sample": 2,
         "max_rotation_degrees": 5.0,
         "noise_std_max": 0.012,
         "disable_aug": False,
@@ -351,10 +360,10 @@ def build_training_config(
         "early_stopping_min_delta": 1e-4,
         "metric_threshold": 0.5,
         "optimize_threshold": True,
-        "threshold_metric": "iou",
-        "threshold_start": 0.2,
-        "threshold_end": 0.8,
-        "threshold_step": 0.02,
+        "threshold_metric": "dice",
+        "threshold_start": 0.35,
+        "threshold_end": 0.75,
+        "threshold_step": 0.01,
         "compute_foreground_ratio": True,
         "foreground_ratio_max_batches": 20,
         "short_side_probe_samples": 0,
@@ -371,12 +380,14 @@ def build_training_config(
         "tversky_alpha": effective_tversky_alpha,
         "tversky_beta": effective_tversky_beta,
         "lovasz_weight": effective_lovasz_weight,
+        "use_boundary_loss": effective_use_boundary_loss,
+        "boundary_weight": effective_boundary_weight,
         "ema_enabled": True,
         "ema_decay": 0.999,
-        "hard_mining_enabled": False,
-        "hard_mining_start_epoch": 8,
-        "hard_mining_weight": 0.05,
-        "hard_mining_gamma": 1.0,
+        "hard_mining_enabled": True,
+        "hard_mining_start_epoch": 5,
+        "hard_mining_weight": 0.03,
+        "hard_mining_gamma": 2.0,
         "default_aug": default_aug,
         "per_dataset_aug": per_dataset_aug,
         "model_config": model_cfg,
