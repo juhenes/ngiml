@@ -713,6 +713,8 @@ def _apply_gpu_augmentations_batch(
         non_zero = torch.abs(ang_rad) > 1e-4
         if non_zero.any():
             thetas = torch.zeros((B, 2, 3), device=images.device, dtype=images.dtype)
+            thetas[:, 0, 0] = 1.0
+            thetas[:, 1, 1] = 1.0
             cos = torch.cos(ang_rad[non_zero])
             sin = torch.sin(ang_rad[non_zero])
             thetas_non = torch.stack([torch.stack([cos, -sin, torch.zeros_like(cos)], dim=1), torch.stack([sin, cos, torch.zeros_like(cos)], dim=1)], dim=1)
@@ -894,7 +896,7 @@ def _collate_impl(
         if high_pass is None:
             collect_high_pass = False
         aug_cfg = per_dataset_aug.get(dataset_name, AugmentationConfig(enable=False))
-        views = aug_cfg.views_per_sample if aug_cfg.enable else 1
+        views = aug_cfg.views_per_sample if (training and aug_cfg.enable) else 1
         views = max(1, views)
 
         base_image = image
@@ -1063,9 +1065,14 @@ def create_dataloaders(
     max_short_side: int | None = None,
     size_bucketing: bool = True,
     short_side_probe_samples: int = 128,
+    normalization_mode_override: str | None = None,
 ) -> Dict[str, DataLoader]:
     manifest = load_manifest(manifest_path)
-    normalization_mode = manifest.normalization_mode
+    normalization_mode = (
+        str(normalization_mode_override)
+        if normalization_mode_override is not None
+        else manifest.normalization_mode
+    )
 
     splits = {
         split: _group_by(split, manifest.samples)

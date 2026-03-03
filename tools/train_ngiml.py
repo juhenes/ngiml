@@ -176,7 +176,7 @@ class TrainConfig:
     auto_resume: bool = False
     round_robin_seed: Optional[int] = 42
     balance_sampling: bool = False
-    balance_real_fake: bool = True
+    balance_real_fake: bool = False
     balanced_positive_ratio: float = 0.5
     balanced_sampler_seed: int = 42
     balanced_sampler_num_samples: Optional[int] = None
@@ -213,7 +213,7 @@ class TrainConfig:
     auto_pos_weight: bool = True
     pos_weight_min: float = 0.5
     pos_weight_max: float = 20.0
-    balanced_pos_weight_cap: float = 6.0
+    balanced_pos_weight_cap: float = 3.0
     loss_hybrid_mode: str = "dice_bce"
     dice_weight: float = 1.0
     bce_weight: float = 1.0
@@ -306,7 +306,7 @@ def parse_args() -> TrainConfig:
     parser.add_argument(
         "--balance-real-fake",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help="Enable weighted sampling to match a target fake-positive ratio in train batches",
     )
     parser.add_argument(
@@ -395,7 +395,7 @@ def parse_args() -> TrainConfig:
     parser.add_argument(
         "--balanced-pos-weight-cap",
         type=float,
-        default=6.0,
+        default=3.0,
         help="When --balance-real-fake is enabled, cap auto pos_weight to this value (<=0 disables cap)",
     )
     parser.add_argument("--loss-hybrid-mode", type=str, default="dice_bce", choices=["dice_bce", "dice_focal"], help="Hybrid loss type")
@@ -593,6 +593,7 @@ def _prepare_dataloaders(cfg: TrainConfig, device: torch.device):
         persistent_workers=cfg.persistent_workers,
         max_short_side=cfg.max_short_side,
         short_side_probe_samples=cfg.short_side_probe_samples,
+        normalization_mode_override=collate_norm_mode,
     )
     return loaders, per_dataset_aug, normalization_mode
 
