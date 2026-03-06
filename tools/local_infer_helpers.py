@@ -112,6 +112,80 @@ def load_default_threshold(checkpoint_path: Path, fallback: float = 0.5) -> floa
     return float(fallback)
 
 
+def resolve_threshold_for_checkpoint(
+    checkpoint_path: Path,
+    checkpoint_epoch: int | None = None,
+    fallback: float = 0.5,
+) -> tuple[float, str]:
+    checkpoint_path = Path(checkpoint_path)
+
+    # First prefer explicit threshold metadata when it belongs to this checkpoint.
+    candidate_files = [
+        checkpoint_path.parent / "best_threshold.json",
+        checkpoint_path.parent.parent / "best_threshold.json",
+    ]
+    for candidate in candidate_files:
+        if not candidate.exists():
+            continue
+        try:
+            import json
+
+            with open(candidate, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            payload_ckpt = str(payload.get("checkpoint_path", ""))
+            if payload_ckpt and Path(payload_ckpt).name == checkpoint_path.name:
+                return float(payload.get("threshold", fallback)), f"{candidate.name}:matching_checkpoint"
+            if checkpoint_epoch is not None and int(payload.get("epoch", -1)) == int(checkpoint_epoch):
+                return float(payload.get("threshold", fallback)), f"{candidate.name}:matching_epoch"
+        except Exception:
+            continue
+
+    # Fallback to per-epoch checkpoint metrics when available.
+    metrics_candidates = [
+        checkpoint_path.parent / "checkpoint_metrics.json",
+        checkpoint_path.parent.parent / "checkpoint_metrics.json",
+    ]
+    for metrics_path in metrics_candidates:
+        if not metrics_path.exists():
+            continue
+        try:
+            import json
+
+            with open(metrics_path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            if not isinstance(payload, list):
+                continue
+
+            by_path = next(
+                (
+                    record for record in payload
+                    if isinstance(record, dict)
+                    and str(record.get("checkpoint_path", "")).endswith(checkpoint_path.name)
+                    and record.get("val_threshold") is not None
+                ),
+                None,
+            )
+            if by_path is not None:
+                return float(by_path["val_threshold"]), f"{metrics_path.name}:matching_path"
+
+            if checkpoint_epoch is not None:
+                by_epoch = next(
+                    (
+                        record for record in reversed(payload)
+                        if isinstance(record, dict)
+                        and int(record.get("epoch", -1)) == int(checkpoint_epoch)
+                        and record.get("val_threshold") is not None
+                    ),
+                    None,
+                )
+                if by_epoch is not None:
+                    return float(by_epoch["val_threshold"]), f"{metrics_path.name}:matching_epoch"
+        except Exception:
+            continue
+
+    return float(load_default_threshold(checkpoint_path, fallback=fallback)), "fallback"
+
+
 def _infer_fusion_channels_from_state_dict(model_state: dict) -> tuple[int, ...] | None:
     stage_channels: dict[int, int] = {}
     pattern = re.compile(r"^fusion\.stages\.(\d+)\.projections\.[^.]+\.weight$")
@@ -204,20 +278,27 @@ def load_model_from_checkpoint(checkpoint_path: Path, device: torch.device | Non
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint_epoch = int(checkpoint.get("epoch", -1))
     model_cfg, config_source = _build_model_config_from_checkpoint(checkpoint)
     model = HybridNGIML(model_cfg).to(device)
 
     missing, unexpected, skipped_mismatched = _load_state_dict_with_fallback(model, checkpoint["model_state"])
     model.eval()
+    resolved_threshold, threshold_source = resolve_threshold_for_checkpoint(
+        Path(checkpoint_path),
+        checkpoint_epoch=checkpoint_epoch,
+        fallback=0.5,
+    )
 
     info = {
-        "epoch": int(checkpoint.get("epoch", -1)),
+        "epoch": checkpoint_epoch,
         "missing_keys": len(missing),
         "unexpected_keys": len(unexpected),
         "skipped_mismatched_keys": int(skipped_mismatched),
         "config_source": str(config_source),
         "fusion_channels": tuple(int(value) for value in model.cfg.fusion.fusion_channels),
-        "default_threshold": float(load_default_threshold(Path(checkpoint_path), fallback=0.5)),
+        "default_threshold": float(resolved_threshold),
+        "threshold_source": str(threshold_source),
         "max_short_side": int((checkpoint.get("train_config") or {}).get("max_short_side", 0) or 0),
     }
     setattr(model, "default_threshold", float(info["default_threshold"]))
