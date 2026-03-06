@@ -249,7 +249,7 @@ def build_default_components():
     from src.model.unet_decoder import UNetDecoderConfig
 
     model_cfg = HybridNGIMLConfig(
-        efficientnet=EfficientNetBackboneConfig(pretrained=True, input_size=320),
+        efficientnet=EfficientNetBackboneConfig(pretrained=True),
         swin=SwinBackboneConfig(model_name="swin_tiny_patch4_window7_224", pretrained=True, input_size=320),
         residual=ResidualNoiseConfig(num_kernels=3, base_channels=32, num_stages=4),
         fusion=FeatureFusionConfig(fusion_channels=(64, 128, 192, 256)),
