@@ -53,7 +53,13 @@ class EfficientNetBackbone(nn.Module):
         # Use timm to create EfficientNet backbone without forcing out_indices.
         # We'll select the requested feature maps from the returned list to avoid timm internal index mismatches.
         model_name = getattr(cfg, 'model_name', 'efficientnet_b0')
-        self.backbone = timm.create_model(model_name, pretrained=cfg.pretrained, features_only=True)
+        model_kwargs = {"pretrained": cfg.pretrained, "features_only": True}
+        if cfg.input_size is not None:
+            if isinstance(cfg.input_size, int):
+                model_kwargs["img_size"] = (int(cfg.input_size), int(cfg.input_size))
+            else:
+                model_kwargs["img_size"] = tuple(int(v) for v in cfg.input_size)
+        self.backbone = timm.create_model(model_name, **model_kwargs)
         avail_n = len(self.backbone.feature_info)
         requested = tuple(sorted(set(self.out_indices)))
         valid_indices = tuple(i for i in requested if 0 <= i < avail_n)

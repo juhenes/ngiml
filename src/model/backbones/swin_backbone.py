@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Sequence, Tuple
+from typing import List, Sequence, Tuple, Union
 
 import logging
 import timm
@@ -22,6 +22,7 @@ class SwinBackboneConfig:
     model_name: str = "swin_tiny_patch4_window7_224"
     pretrained: bool = True
     out_indices: Sequence[int] = (0, 1, 2, 3)
+    input_size: Union[int, Tuple[int, int], None] = 320
 
 
 class SwinBackbone(nn.Module):
@@ -30,9 +31,15 @@ class SwinBackbone(nn.Module):
     def __init__(self, config: SwinBackboneConfig | None = None, flash_attention: bool = False, xformers: bool = False) -> None:
         super().__init__()
         cfg = config or SwinBackboneConfig()
+        model_kwargs = {"pretrained": cfg.pretrained, "features_only": True}
+        if cfg.input_size is not None:
+            if isinstance(cfg.input_size, int):
+                model_kwargs["img_size"] = (int(cfg.input_size), int(cfg.input_size))
+            else:
+                model_kwargs["img_size"] = tuple(int(v) for v in cfg.input_size)
         # Create model without forcing out_indices first, then clamp requested indices
         # to the model's available feature levels and recreate with valid indices.
-        self.model = timm.create_model(cfg.model_name, pretrained=cfg.pretrained, features_only=True)
+        self.model = timm.create_model(cfg.model_name, **model_kwargs)
         avail_n = len(self.model.feature_info)
         requested = tuple(cfg.out_indices) if cfg.out_indices is not None else tuple(range(avail_n))
         valid_indices = tuple(i for i in requested if 0 <= i < avail_n)
