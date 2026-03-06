@@ -815,8 +815,36 @@ def save_checkpoint(
 
 def append_checkpoint_log(path: Path, record: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record) + "\n")
+    records: list[dict] = []
+
+    if path.exists() and path.stat().st_size > 0:
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            if isinstance(payload, list):
+                records = [item for item in payload if isinstance(item, dict)]
+            elif isinstance(payload, dict):
+                records = [payload]
+        except Exception:
+            records = []
+    else:
+        legacy_jsonl = path.with_suffix(".jsonl")
+        if legacy_jsonl.exists() and legacy_jsonl.stat().st_size > 0:
+            try:
+                with open(legacy_jsonl, "r", encoding="utf-8") as handle:
+                    for line in handle:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        item = json.loads(line)
+                        if isinstance(item, dict):
+                            records.append(item)
+            except Exception:
+                records = []
+
+    records.append(record)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(records, handle, indent=2)
 
 
 def load_checkpoint(
@@ -1898,7 +1926,7 @@ def run_training(cfg: TrainConfig) -> None:
     )
 
     checkpoint_dir = out_dir / "checkpoints"
-    checkpoint_log_path = checkpoint_dir / "checkpoint_metrics.jsonl"
+    checkpoint_log_path = checkpoint_dir / "checkpoint_metrics.json"
 
     start_epoch = 0
     global_step = 0
