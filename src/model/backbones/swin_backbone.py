@@ -173,6 +173,10 @@ class SwinBackbone(nn.Module):
         pad_h = (ph - (h % ph)) % ph
         pad_w = (pw - (w % pw)) % pw
         if pad_h or pad_w:
+            _LOG.warning(
+                "SwinBackbone internal pad to patch multiple: (%d,%d) -> (%d,%d)",
+                h, w, h + pad_h, w + pad_w,
+            )
             x = NN_F.pad(x, (0, pad_w, 0, pad_h), value=0)
 
         # If the underlying timm model declares a default input size, always
@@ -186,6 +190,10 @@ class SwinBackbone(nn.Module):
             self._propagate_spatial_metadata(x.shape[-2], x.shape[-1])
             # Resize to exact expected model input size (pad then resize)
             if (x.shape[-2], x.shape[-1]) != (exp_h, exp_w):
+                _LOG.warning(
+                    "SwinBackbone internal resize to model default: (%d,%d) -> (%d,%d)",
+                    x.shape[-2], x.shape[-1], exp_h, exp_w,
+                )
                 x_resized = NN_F.interpolate(x, size=(exp_h, exp_w), mode="bilinear", align_corners=False)
             else:
                 x_resized = x

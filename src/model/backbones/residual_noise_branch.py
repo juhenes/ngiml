@@ -135,10 +135,22 @@ class ResidualNoiseModule(nn.Module):
         if high_pass is not None:
             hp = high_pass
             if hp.shape[-2:] != x.shape[-2:]:
+                _LOG.warning(
+                    "ResidualNoiseBranch high_pass spatial align: (%d,%d) -> (%d,%d)",
+                    hp.shape[-2], hp.shape[-1], x.shape[-2], x.shape[-1],
+                )
                 hp = F.interpolate(hp, size=x.shape[-2:], mode="bilinear", align_corners=False)
             if hp.shape[1] == 1 and c > 1:
+                _LOG.warning(
+                    "ResidualNoiseBranch high_pass channel repeat: %d -> %d",
+                    hp.shape[1], c,
+                )
                 hp = hp.repeat(1, c, 1, 1)
             elif hp.shape[1] != c:
+                _LOG.warning(
+                    "ResidualNoiseBranch high_pass channel align: %d -> %d",
+                    hp.shape[1], c,
+                )
                 hp = hp[:, :c, ...]
                 if hp.shape[1] < c:
                     hp = F.pad(hp, (0, 0, 0, 0, 0, c - hp.shape[1]))

@@ -76,6 +76,10 @@ class EfficientNetBackbone(nn.Module):
     def forward(self, x: torch.Tensor) -> List[torch.Tensor]:
         """Return multi-scale feature maps."""
         if self.enforce_input_size and x.shape[-2:] != self.expected_hw:
+            _LOG.warning(
+                "EfficientNetBackbone internal resize (enforce_input_size=True): (%d,%d) -> (%d,%d)",
+                x.shape[-2], x.shape[-1], self.expected_hw[0], self.expected_hw[1],
+            )
             x = F.interpolate(x, size=self.expected_hw, mode="bilinear", align_corners=False)
         # Guard timm model `out_indices` attribute to avoid internal index errors
         if hasattr(self.backbone, "feature_info") and hasattr(self.backbone, "out_indices"):
