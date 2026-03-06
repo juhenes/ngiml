@@ -31,6 +31,7 @@ class SwinBackbone(nn.Module):
     def __init__(self, config: SwinBackboneConfig | None = None, flash_attention: bool = False, xformers: bool = False) -> None:
         super().__init__()
         cfg = config or SwinBackboneConfig()
+        self.config = cfg
         model_kwargs = {"pretrained": cfg.pretrained, "features_only": True}
         if cfg.input_size is not None:
             if isinstance(cfg.input_size, int):
@@ -88,6 +89,36 @@ class SwinBackbone(nn.Module):
                 # Insert xformers logic here if needed
             except ImportError:
                 _LOG.info("xformers not installed; xformers attention will not be used.")
+
+    @staticmethod
+    def _normalize_spatial_size(value: object) -> Tuple[int, int] | None:
+        if value is None:
+            return None
+        if isinstance(value, int):
+            size = int(value)
+            return (size, size)
+        if isinstance(value, (tuple, list)):
+            if len(value) == 2:
+                return (int(value[0]), int(value[1]))
+            if len(value) >= 3:
+                return (int(value[-2]), int(value[-1]))
+        return None
+
+    def _expected_input_size(self) -> Tuple[int, int] | None:
+        candidates = [
+            getattr(self.model, "img_size", None),
+            getattr(self.patch_embed, "img_size", None),
+            self.config.input_size,
+        ]
+        default_cfg = getattr(self.model, "default_cfg", None) or {}
+        if isinstance(default_cfg, dict):
+            candidates.append(default_cfg.get("input_size"))
+
+        for candidate in candidates:
+            normalized = self._normalize_spatial_size(candidate)
+            if normalized is not None:
+                return normalized
+        return None
 
     def _propagate_spatial_metadata(self, height: int, width: int) -> None:
         # Accept non-multiple spatial dims by adjusting to the next multiple of patch size.
@@ -187,12 +218,19 @@ class SwinBackbone(nn.Module):
             x = NN_F.pad(x, (0, pad_w, 0, pad_h), value=0)
 
         # Prefer preserving the incoming resolution after patch-multiple padding.
-        # Only fall back to model-default resizing if the underlying timm model
-        # raises an assertion for the current spatial size.
-        default_cfg = getattr(self.model, "default_cfg", None) or {}
-        input_size = default_cfg.get("input_size") if isinstance(default_cfg, dict) else None
-        if input_size:
-            exp_h, exp_w = int(input_size[1]), int(input_size[2])
+        # If the underlying patch embed is configured for strict image sizes,
+        # proactively resize to the model's actual configured size. Otherwise,
+        # only fall back after an assertion from timm.
+        expected_size = self._expected_input_size()
+        strict_img_size = bool(getattr(self.patch_embed, "strict_img_size", False))
+        if expected_size is not None:
+            exp_h, exp_w = expected_size
+            if strict_img_size and (x.shape[-2], x.shape[-1]) != (exp_h, exp_w):
+                _LOG.warning(
+                    "SwinBackbone strict-size resize to configured model input: (%d,%d) -> (%d,%d)",
+                    x.shape[-2], x.shape[-1], exp_h, exp_w,
+                )
+                x = NN_F.interpolate(x, size=(exp_h, exp_w), mode="bilinear", align_corners=False)
             self._propagate_spatial_metadata(x.shape[-2], x.shape[-1])
             try:
                 features = self.model(x)
