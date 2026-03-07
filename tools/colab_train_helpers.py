@@ -286,10 +286,10 @@ def build_default_components():
         views_per_sample=2,
         enable_flips=True,
         enable_rotations=True,
-        max_rotation_degrees=5.0,
+        max_rotation_degrees=4.0,
         enable_random_crop=True,
-        crop_scale_range=(0.75, 1.0),
-        object_crop_bias_prob=0.85,
+        crop_scale_range=(0.8, 1.0),
+        object_crop_bias_prob=0.8,
         min_fg_pixels_for_object_crop=8,
         multiscale_training=False,
         multiscale_short_side_range=(384, 640),
@@ -301,33 +301,10 @@ def build_default_components():
         brightness_jitter_factors=(0.9, 1.1),
         contrast_jitter_factors=(0.9, 1.1),
         enable_noise=True,
-        noise_std_range=(0.0, 0.012),
+        noise_std_range=(0.0, 0.01),
     )
 
-    per_dataset_aug = {
-        "IMD2020": AugmentationConfig(
-            enable=True,
-            views_per_sample=3,
-            enable_flips=True,
-            enable_rotations=True,
-            max_rotation_degrees=8.0,
-            enable_random_crop=True,
-            crop_scale_range=(0.75, 1.0),
-            object_crop_bias_prob=0.9,
-            min_fg_pixels_for_object_crop=4,
-            multiscale_training=False,
-            multiscale_short_side_range=(384, 640),
-            enable_elastic=False,
-            elastic_prob=0.0,
-            elastic_alpha=10.0,
-            elastic_sigma=5.0,
-            enable_color_jitter=True,
-            brightness_jitter_factors=(0.85, 1.15),
-            contrast_jitter_factors=(0.85, 1.15),
-            enable_noise=True,
-            noise_std_range=(0.0, 0.02),
-        )
-    }
+    per_dataset_aug = {}
 
     return model_cfg, loss_cfg, default_aug, per_dataset_aug
 
