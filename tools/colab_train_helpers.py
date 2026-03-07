@@ -456,7 +456,7 @@ def apply_phase2_resume_preset(
 
 def apply_colab_runtime_settings(
     training_config: dict,
-    balance_sampling: bool = True,
+    balance_sampling: bool = False,
     local_cache_dir: str | None = None,
     tune_for_large_batch: bool = False,
 ) -> dict:
