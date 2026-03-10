@@ -361,6 +361,15 @@ def build_default_configs() -> Tuple[List[DatasetStructureConfig], Dict[str, Spl
         ),
         DatasetStructureConfig(
             dataset_root="./datasets",
+            dataset_name="CASIA1",
+            real_subdir="Au",
+            fake_subdir="Tp",
+            mask_subdir="Gt",
+            mask_suffix="_gt",
+            prepared_root="./prepared",
+        ),
+        DatasetStructureConfig(
+            dataset_root="./datasets",
             dataset_name="COVERAGE",
             real_subdir="real",
             fake_subdir="fake",
@@ -381,6 +390,7 @@ def build_default_configs() -> Tuple[List[DatasetStructureConfig], Dict[str, Spl
 
     per_dataset_splits = {
         "CASIA2": SplitConfig(train=0.8, val=0.2, test=0.0, seed=shared_seed),
+        "CASIA1": SplitConfig(train=0.0, val=0.0, test=1.0, seed=shared_seed),
         "COVERAGE": SplitConfig(train=0.0, val=0.0, test=1.0, seed=shared_seed),
         "Columbia": SplitConfig(train=0.0, val=0.0, test=1.0, seed=shared_seed),
     }
