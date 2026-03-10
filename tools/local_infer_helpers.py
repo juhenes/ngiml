@@ -365,9 +365,9 @@ def load_image_mask_from_record(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
     image_path = str(record.image_path)
     if "::" in image_path and image_path.endswith(".npz"):
-        image, mask, high_pass = _load_from_tar_npz(image_path)
+        image, mask, high_pass, _edge_mask = _load_from_tar_npz(image_path)
     elif image_path.endswith(".npz"):
-        image, mask, high_pass = _load_from_npz(_resolve_possible_local_path(image_path))
+        image, mask, high_pass, _edge_mask = _load_from_npz(_resolve_possible_local_path(image_path))
     else:
         image = _load_image(_resolve_possible_local_path(image_path))
         high_pass = None
