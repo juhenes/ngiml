@@ -50,6 +50,38 @@ def test_boundary_loss_uses_explicit_edge_target_when_present():
     assert explicit_loss.item() > fallback_loss.item()
 
 
+def test_boundary_loss_uses_last_two_prediction_stages():
+    class _StubBoundaryLoss(torch.nn.Module):
+        def forward(self, pred, target, edge_target=None, edge_target_present=None):
+            del target, edge_target, edge_target_present
+            return pred.mean()
+
+    loss_fn = MultiStageManipulationLoss(
+        MultiStageLossConfig(
+            dice_weight=0.0,
+            bce_weight=0.0,
+            use_boundary_loss=True,
+            boundary_weight=1.0,
+        )
+    )
+    loss_fn.boundary_loss = _StubBoundaryLoss()
+    target = torch.zeros((1, 1, 8, 8), dtype=torch.float32)
+    preds = [
+        torch.full((1, 1, 8, 8), 100.0, dtype=torch.float32),
+        torch.full((1, 1, 8, 8), 10.0, dtype=torch.float32),
+        torch.full((1, 1, 8, 8), 20.0, dtype=torch.float32),
+    ]
+
+    loss_value = loss_fn(preds, target)
+
+    # Boundary supervision should ignore the earliest stage and average the last
+    # two with weights [0.5, 1.0] -> (0.5*10 + 1.0*20) / 1.5 = 16.666...
+    # The module then divides the total loss by the main stage-weight normalizer
+    # for three predictions: 0.05 + 0.1 + 0.2 = 0.35.
+    expected = torch.tensor((50.0 / 3.0) / 0.35)
+    assert torch.isclose(loss_value, expected, atol=1e-5)
+
+
 def test_prepare_dataset_computes_train_edge_mask_from_main_mask(tmp_path):
     image_path = tmp_path / "image.png"
     mask_path = tmp_path / "mask.png"

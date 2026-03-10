@@ -155,6 +155,11 @@ class MultiStageManipulationLoss(nn.Module):
             raise ValueError("Provided stage_weights shorter than number of stages")
         return list(self.cfg.stage_weights[:num_stages])
 
+    def _boundary_stage_weights(self, num_stages: int) -> List[float]:
+        if num_stages <= 1:
+            return [1.0]
+        return [0.5, 1.0][-min(2, num_stages):]
+
     def forward(
         self,
         preds: List[Tensor],
@@ -216,15 +221,22 @@ class MultiStageManipulationLoss(nn.Module):
             total_loss += stage_weight * stage_loss
             normalizer += stage_weight
 
-        # Add boundary loss on final prediction
+        # Apply stronger shape pressure on the last two decoder stages.
         if self.use_boundary_loss and self.boundary_loss is not None and preds:
-            boundary = self.boundary_loss(
-                preds[-1],
-                target,
-                edge_target=edge_target,
-                edge_target_present=edge_target_present,
-            )
-            total_loss += self.boundary_weight * boundary
+            boundary_preds = preds[-2:] if len(preds) > 1 else preds[-1:]
+            boundary_weights = self._boundary_stage_weights(len(boundary_preds))
+            boundary_total = 0.0
+            boundary_normalizer = 0.0
+            for boundary_stage_weight, boundary_logits in zip(boundary_weights, boundary_preds):
+                boundary = self.boundary_loss(
+                    boundary_logits,
+                    target,
+                    edge_target=edge_target,
+                    edge_target_present=edge_target_present,
+                )
+                boundary_total += float(boundary_stage_weight) * boundary
+                boundary_normalizer += float(boundary_stage_weight)
+            total_loss += self.boundary_weight * (boundary_total / max(boundary_normalizer, 1e-6))
 
         return total_loss / max(normalizer, 1e-6)
 

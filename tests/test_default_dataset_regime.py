@@ -33,8 +33,10 @@ def test_default_components_use_shared_augmentation_defaults():
     _model_cfg, _loss_cfg, default_aug, per_dataset_aug = build_default_components()
 
     assert default_aug.enable is True
-    assert default_aug.views_per_sample == 3
+    assert default_aug.views_per_sample == 2
     assert default_aug.max_rotation_degrees == 6.0
     assert default_aug.crop_scale_range == (0.75, 1.0)
     assert default_aug.noise_std_range == (0.0, 0.012)
+    assert default_aug.multiscale_training is True
+    assert default_aug.multiscale_short_side_range == (384, 576)
     assert per_dataset_aug == {}
