@@ -1,4 +1,8 @@
-from tools.colab_train_helpers import build_default_components
+import torch
+
+from src.data.config import AugmentationConfig
+from src.data.dataloaders import _apply_gpu_augmentations_batch
+from tools.colab_train_helpers import build_default_components, build_training_config
 from tools.prepare_datasets import build_default_configs
 
 
@@ -40,3 +44,46 @@ def test_default_components_use_shared_augmentation_defaults():
     assert default_aug.multiscale_training is True
     assert default_aug.multiscale_short_side_range == (384, 576)
     assert per_dataset_aug == {}
+
+
+def test_batched_gpu_augmentations_apply_multiscale_resize():
+    images = torch.rand(2, 3, 384, 512)
+    masks = torch.zeros(2, 1, 384, 512)
+    cfg = AugmentationConfig(
+        enable=True,
+        enable_flips=False,
+        enable_rotations=False,
+        enable_random_crop=False,
+        enable_elastic=False,
+        enable_color_jitter=False,
+        enable_noise=False,
+        multiscale_training=True,
+        multiscale_short_side_range=(448, 448),
+    )
+    generator = torch.Generator().manual_seed(123)
+
+    out_images, out_masks, out_high_pass, out_edge_masks = _apply_gpu_augmentations_batch(
+        images,
+        masks,
+        cfg,
+        generator=generator,
+    )
+
+    assert out_images.shape == (2, 3, 448, 597)
+    assert out_masks.shape == (2, 1, 448, 597)
+    assert out_high_pass is None
+    assert out_edge_masks is None
+
+
+def test_colab_training_config_defaults_batch_size_to_20(tmp_path):
+    model_cfg, loss_cfg, default_aug, per_dataset_aug = build_default_components()
+    training_config = build_training_config(
+        manifest_path=tmp_path / "manifest.json",
+        output_dir=str(tmp_path / "runs"),
+        model_cfg=model_cfg,
+        loss_cfg=loss_cfg,
+        default_aug=default_aug,
+        per_dataset_aug=per_dataset_aug,
+    )
+
+    assert training_config["batch_size"] == 20

@@ -151,7 +151,7 @@ class TrainConfig:
     manifest: str
     scheduler_type: str = "cosine"  # one of: 'cosine', 'step' (cosine enabled by default)
     output_dir: str = "runs/ngiml"
-    batch_size: int = 8
+    batch_size: int = 20
     epochs: int = 50
     num_workers: int = max(2, min(8, (os.cpu_count() or 4) // 4))
     amp: bool = True
@@ -266,7 +266,7 @@ def parse_args() -> TrainConfig:
     parser.add_argument("--scheduler-type", type=str, default="cosine", choices=["cosine", "step"], help="LR scheduler type (cosine or step)")
     parser.add_argument("--manifest", required=True, help="Path to prepared manifest JSON")
     parser.add_argument("--output-dir", default="runs/ngiml", help="Directory to write checkpoints/logs")
-    parser.add_argument("--batch-size", type=int, default=8, help="Mini-batch size")
+    parser.add_argument("--batch-size", type=int, default=20, help="Mini-batch size")
     parser.add_argument("--epochs", type=int, default=50, help="Number of training epochs")
     parser.add_argument("--num-workers", type=int, default=default_workers, help="DataLoader workers")
     parser.add_argument("--no-amp", action="store_true", help="Disable mixed precision training")
@@ -594,15 +594,18 @@ def _prepare_dataloaders(cfg: TrainConfig, device: torch.device):
     # normalization_mode are returned for on-device application in the loop.
     collate_aug_map = per_dataset_aug
     collate_norm_mode = normalization_mode
+    loader_aug_map = per_dataset_aug
     if device.type == "cuda":
-        from dataclasses import replace as _dc_replace
-
-        collate_aug_map = {name: _dc_replace(aug, enable=False) for name, aug in per_dataset_aug.items()}
+        collate_aug_map = {name: replace(aug, enable=False) for name, aug in per_dataset_aug.items()}
+        loader_aug_map = {
+            name: replace(aug, multiscale_training=False)
+            for name, aug in per_dataset_aug.items()
+        }
         collate_norm_mode = "zero_one"
 
     loaders = create_dataloaders(
         manifest_path,
-        collate_aug_map,
+        loader_aug_map,
         batch_size=cfg.batch_size,
         device=device,
         pin_memory=cfg.pin_memory,

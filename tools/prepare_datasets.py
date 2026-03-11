@@ -27,6 +27,7 @@ if str(ROOT) not in sys.path:
 from src.data.config import DatasetStructureConfig, Manifest, PreparationConfig, SampleRecord, SplitConfig
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+JPEG_EXTENSIONS = {".jpg", ".jpeg"}
 
 
 def _compute_high_pass(image_np: np.ndarray) -> np.ndarray:
@@ -78,6 +79,17 @@ def _compute_edge_mask(mask_np: np.ndarray) -> np.ndarray:
         np.bitwise_and(eroded, neighbor, out=eroded)
     edge = np.bitwise_and(center, np.uint8(1) - eroded)
     return edge * np.uint8(255)
+
+
+def _jpeg_normalize_if_needed(image: Image.Image, image_path: Path, quality: int = 95) -> Image.Image:
+    if image_path.suffix.lower() in JPEG_EXTENSIONS:
+        return image
+
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=int(quality))
+    buffer.seek(0)
+    with Image.open(buffer) as jpeg_image:
+        return jpeg_image.convert("RGB")
 
 
 class TarShardWriter:
@@ -201,6 +213,8 @@ def _build_npz_bytes(
             mask_img = mask_img.resize((target_size, target_size), Image.NEAREST)
         if edge_mask_img is not None:
             edge_mask_img = edge_mask_img.resize((target_size, target_size), Image.NEAREST)
+
+    image = _jpeg_normalize_if_needed(image, image_path)
 
     image_np = np.asarray(image, dtype=np.uint8)
     payload = {"image": image_np}

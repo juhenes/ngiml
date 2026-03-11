@@ -286,7 +286,7 @@ def build_default_components():
         views_per_sample=2,
         enable_flips=True,
         enable_rotations=True,
-        max_rotation_degrees=6.0,
+        max_rotation_degrees=10.0,
         enable_random_crop=True,
         crop_scale_range=(0.75, 1.0),
         object_crop_bias_prob=0.85,
@@ -332,7 +332,7 @@ def build_training_config(
     return {
         "manifest": str(manifest_path),
         "output_dir": output_dir,
-        "batch_size": 16,
+        "batch_size": 20,
         "grad_accum_steps": 1,
         "epochs": 50,
         "num_workers": 0,
@@ -461,13 +461,13 @@ def apply_colab_runtime_settings(
     local_cache_dir: str | None = None,
     tune_for_large_batch: bool = False,
 ) -> dict:
-    def _apply_effective_batch_optimizer_scaling(config: dict, base_effective_batch: int = 12) -> None:
+    def _apply_effective_batch_optimizer_scaling(config: dict, base_effective_batch: int = 20) -> None:
         model_cfg = config.get("model_config")
         if model_cfg is None or not hasattr(model_cfg, "optimizer"):
             return
 
         optimizer_cfg = model_cfg.optimizer
-        batch_size = int(config.get("batch_size", 12))
+        batch_size = int(config.get("batch_size", 20))
         grad_accum_steps = int(config.get("grad_accum_steps", 1))
         effective_batch = max(1, batch_size * grad_accum_steps)
 
@@ -507,7 +507,7 @@ def apply_colab_runtime_settings(
                 "balance_sampling": bool(balance_sampling),
             }
         )
-        _apply_effective_batch_optimizer_scaling(training_config, base_effective_batch=12)
+        _apply_effective_batch_optimizer_scaling(training_config, base_effective_batch=20)
     else:
         training_config.update(
             {
@@ -524,7 +524,7 @@ def apply_colab_runtime_settings(
                 "balance_sampling": bool(balance_sampling),
             }
         )
-        _apply_effective_batch_optimizer_scaling(training_config, base_effective_batch=12)
+        _apply_effective_batch_optimizer_scaling(training_config, base_effective_batch=20)
 
     return training_config
 
@@ -554,10 +554,10 @@ def apply_high_throughput_settings(training_config: dict, target_batch_size: int
     model_cfg = training_config.get("model_config")
     if model_cfg is not None and hasattr(model_cfg, "optimizer"):
         optimizer_cfg = model_cfg.optimizer
-        batch_size = int(training_config.get("batch_size", 12))
+        batch_size = int(training_config.get("batch_size", 20))
         grad_accum_steps = int(training_config.get("grad_accum_steps", 1))
         effective_batch = max(1, batch_size * grad_accum_steps)
-        ratio = float(effective_batch) / float(12)
+        ratio = float(effective_batch) / float(20)
         lr_scale = float(min(max(math.sqrt(ratio), 0.75), 1.8))
         wd_scale = float(min(max(pow(ratio, 0.25), 0.9), 1.35))
         for group_name in ("efficientnet", "swin", "residual", "fusion", "decoder"):

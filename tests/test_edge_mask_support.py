@@ -6,7 +6,7 @@ from PIL import Image
 
 from src.data.config import Manifest, SampleRecord
 from src.model.losses import MultiStageLossConfig, MultiStageManipulationLoss
-from tools.prepare_datasets import _build_npz_bytes
+from tools.prepare_datasets import _build_npz_bytes, _jpeg_normalize_if_needed
 
 
 def test_manifest_roundtrip_preserves_edge_mask_path():
@@ -136,3 +136,51 @@ def test_prepare_dataset_skips_computed_edge_mask_outside_train(tmp_path):
 
     with np.load(io.BytesIO(npz_bytes), allow_pickle=False) as data:
         assert "edge_mask" not in data
+
+
+def test_prepare_dataset_jpeg_compresses_non_jpeg_inputs(tmp_path):
+    image_path = tmp_path / "image.png"
+    rng = np.random.default_rng(123)
+    image = rng.integers(0, 256, size=(16, 16, 3), dtype=np.uint8)
+    Image.fromarray(image).save(image_path)
+
+    npz_bytes = _build_npz_bytes(
+        image_path=image_path,
+        mask_path=None,
+        edge_mask_path=None,
+        target_size=16,
+        include_high_pass=False,
+        compute_edge_mask=False,
+    )
+
+    expected = np.asarray(_jpeg_normalize_if_needed(Image.fromarray(image), image_path), dtype=np.uint8)
+    with np.load(io.BytesIO(npz_bytes), allow_pickle=False) as data:
+        prepared = data["image"]
+
+    assert prepared.shape == image.shape
+    assert np.array_equal(prepared, expected)
+    assert not np.array_equal(prepared, image)
+
+
+def test_prepare_dataset_preserves_existing_jpeg_inputs(tmp_path):
+    image_path = tmp_path / "image.jpg"
+    rng = np.random.default_rng(456)
+    image = rng.integers(0, 256, size=(16, 16, 3), dtype=np.uint8)
+    Image.fromarray(image).save(image_path, format="JPEG", quality=95)
+
+    with Image.open(image_path) as saved_jpeg:
+        expected = np.asarray(saved_jpeg.convert("RGB"), dtype=np.uint8)
+
+    npz_bytes = _build_npz_bytes(
+        image_path=image_path,
+        mask_path=None,
+        edge_mask_path=None,
+        target_size=16,
+        include_high_pass=False,
+        compute_edge_mask=False,
+    )
+
+    with np.load(io.BytesIO(npz_bytes), allow_pickle=False) as data:
+        prepared = data["image"]
+
+    assert np.array_equal(prepared, expected)

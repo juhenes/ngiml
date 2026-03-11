@@ -9,6 +9,13 @@ def test_balance_real_fake_cli_default_false(monkeypatch):
     assert cfg.balance_real_fake is True
 
 
+def test_batch_size_default_matches_train_config(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["train_ngiml.py", "--manifest", "dummy_manifest.json"])
+    cfg = parse_args()
+    assert cfg.batch_size == 20
+    assert TrainConfig(manifest="dummy_manifest.json").batch_size == 20
+
+
 def test_scheduler_type_cli_default_and_mapping(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["train_ngiml.py", "--manifest", "dummy_manifest.json"])
     cfg = parse_args()

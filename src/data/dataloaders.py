@@ -751,6 +751,33 @@ def _apply_gpu_augmentations_batch(
     def _rand_scalar(shape=(B,)):
         return torch.rand(shape, device=images.device, generator=generator)
 
+    if cfg.multiscale_training:
+        short_min, short_max = (int(cfg.multiscale_short_side_range[0]), int(cfg.multiscale_short_side_range[1]))
+        short_min = max(1, short_min)
+        short_max = max(short_min, short_max)
+        _, _, height, width = images.shape
+        current_short = min(height, width)
+        if current_short > 0:
+            target_short = int(
+                torch.randint(
+                    short_min,
+                    short_max + 1,
+                    (),
+                    device=images.device,
+                    generator=generator,
+                ).item()
+            )
+            if target_short != current_short:
+                scale = float(target_short) / float(current_short)
+                new_height = max(1, int(round(height * scale)))
+                new_width = max(1, int(round(width * scale)))
+                images = NN_F.interpolate(images, size=(new_height, new_width), mode="bilinear", align_corners=False)
+                masks = NN_F.interpolate(masks, size=(new_height, new_width), mode="nearest")
+                if high_pass is not None:
+                    high_pass = NN_F.interpolate(high_pass, size=(new_height, new_width), mode="bilinear", align_corners=False)
+                if edge_masks is not None:
+                    edge_masks = NN_F.interpolate(edge_masks, size=(new_height, new_width), mode="nearest")
+
     # Horizontal and vertical flips
     if cfg.enable_flips:
         horiz = _rand_scalar() < 0.5
