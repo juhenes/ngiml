@@ -291,7 +291,7 @@ def build_default_components():
         crop_scale_range=(0.75, 1.0),
         object_crop_bias_prob=0.85,
         min_fg_pixels_for_object_crop=8,
-        multiscale_training=True,
+        multiscale_training=False,
         multiscale_short_side_range=(384, 576),
         enable_elastic=False,
         elastic_prob=0.0,
