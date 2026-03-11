@@ -57,6 +57,33 @@ from src.model.hybrid_ngiml import HybridNGIML, HybridNGIMLConfig
 from src.model.losses import MultiStageLossConfig, MultiStageManipulationLoss
 
 
+def _stack_padded_tensors(tensors: Sequence[torch.Tensor], fill_value: float = 0.0) -> torch.Tensor:
+    if not tensors:
+        raise ValueError("Expected at least one tensor to stack")
+
+    max_c = max(int(t.shape[0]) for t in tensors)
+    max_h = max(int(t.shape[-2]) for t in tensors)
+    max_w = max(int(t.shape[-1]) for t in tensors)
+    padded: list[torch.Tensor] = []
+    for tensor in tensors:
+        c, h, w = tensor.shape
+        out = tensor
+        if c < max_c:
+            channel_pad = torch.full(
+                (max_c - c, h, w),
+                fill_value,
+                dtype=tensor.dtype,
+                device=tensor.device,
+            )
+            out = torch.cat([out, channel_pad], dim=0)
+        pad_h = max_h - h
+        pad_w = max_w - w
+        if pad_h or pad_w:
+            out = torch.nn.functional.pad(out, (0, pad_w, 0, pad_h), value=fill_value)
+        padded.append(out)
+    return torch.stack(padded, dim=0)
+
+
 class _PrefetchLoader:
     """Simple async prefetcher that moves next batch to CUDA in a background stream.
 
@@ -1564,6 +1591,10 @@ def train_one_epoch(
             datasets_list = batch.get("datasets", None)
             if datasets_list is not None:
                 bsz = images.shape[0]
+                aug_images: list[torch.Tensor | None] = [None] * bsz
+                aug_masks: list[torch.Tensor | None] = [None] * bsz
+                aug_edge_masks: list[torch.Tensor | None] | None = [None] * bsz if isinstance(edge_masks, torch.Tensor) else None
+                aug_high_passes: list[torch.Tensor | None] | None = [None] * bsz if isinstance(high_pass, torch.Tensor) else None
                 # Group indices by dataset name so we can batch augment per-dataset
                 idxs_by_ds: dict[str, list[int]] = {}
                 for i in range(bsz):
@@ -1574,46 +1605,50 @@ def train_one_epoch(
                 gen = gen if 'gen' in locals() else gen
                 for ds_name, idxs in idxs_by_ds.items():
                     aug_cfg = per_dataset_aug.get(ds_name, None)
+                    img_slice = images[idxs]
+                    mask_slice = masks[idxs]
+                    edge_mask_slice = edge_masks[idxs] if isinstance(edge_masks, torch.Tensor) else None
+                    hp_slice = high_pass[idxs] if high_pass is not None else None
                     if aug_cfg is None or not getattr(aug_cfg, "enable", False):
                         # Apply normalization on-device in batch
                         if normalization_mode == "imagenet":
                             mean = imagenet_mean.view(1, 3, 1, 1)
                             std = imagenet_std.view(1, 3, 1, 1)
-                            images[idxs] = (images[idxs] - mean) / std
+                            img_out = (img_slice - mean) / std
                         else:
-                            # zero_one or other modes: leave as-is
-                            images[idxs] = images[idxs]
-                        continue
+                            img_out = img_slice
+                        mask_out = mask_slice
+                        hp_out = hp_slice
+                        edge_mask_out = edge_mask_slice
+                    else:
+                        img_out, mask_out, hp_out, edge_mask_out = _apply_gpu_augmentations_batch(
+                            img_slice,
+                            mask_slice,
+                            aug_cfg,
+                            high_pass=hp_slice,
+                            edge_masks=edge_mask_slice,
+                            generator=gen,
+                        )
 
-                    # Slice the batch and apply batched augmentations
-                    img_slice = images[idxs]
-                    mask_slice = masks[idxs]
-                    edge_mask_slice = edge_masks[idxs] if isinstance(edge_masks, torch.Tensor) else None
-                    hp_slice = None
-                    if high_pass is not None:
-                        hp_slice = high_pass[idxs]
+                        if normalization_mode == "imagenet":
+                            mean = imagenet_mean.view(1, 3, 1, 1)
+                            std = imagenet_std.view(1, 3, 1, 1)
+                            img_out = (img_out - mean) / std
 
-                    img_out, mask_out, hp_out, edge_mask_out = _apply_gpu_augmentations_batch(
-                        img_slice,
-                        mask_slice,
-                        aug_cfg,
-                        high_pass=hp_slice,
-                        edge_masks=edge_mask_slice,
-                        generator=gen,
-                    )
+                    for local_idx, batch_idx in enumerate(idxs):
+                        aug_images[batch_idx] = img_out[local_idx]
+                        aug_masks[batch_idx] = mask_out[local_idx]
+                        if aug_high_passes is not None:
+                            aug_high_passes[batch_idx] = hp_out[local_idx] if hp_out is not None else None
+                        if aug_edge_masks is not None:
+                            aug_edge_masks[batch_idx] = edge_mask_out[local_idx] if edge_mask_out is not None else edge_mask_slice[local_idx]
 
-                    # Apply normalization to the augmented slice
-                    if normalization_mode == "imagenet":
-                        mean = imagenet_mean.view(1, 3, 1, 1)
-                        std = imagenet_std.view(1, 3, 1, 1)
-                        img_out = (img_out - mean) / std
-
-                    images[idxs] = img_out
-                    masks[idxs] = mask_out
-                    if hp_out is not None and high_pass is not None:
-                        high_pass[idxs] = hp_out
-                    if edge_mask_out is not None and isinstance(edge_masks, torch.Tensor):
-                        edge_masks[idxs] = edge_mask_out
+                images = _stack_padded_tensors([tensor for tensor in aug_images if tensor is not None])
+                masks = _stack_padded_tensors([tensor for tensor in aug_masks if tensor is not None])
+                if aug_high_passes is not None and all(tensor is not None for tensor in aug_high_passes):
+                    high_pass = _stack_padded_tensors([tensor for tensor in aug_high_passes if tensor is not None])
+                if aug_edge_masks is not None and all(tensor is not None for tensor in aug_edge_masks):
+                    edge_masks = _stack_padded_tensors([tensor for tensor in aug_edge_masks if tensor is not None])
             aug_end = time.perf_counter()
         else:
             aug_end = None

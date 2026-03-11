@@ -4,6 +4,7 @@ from src.data.config import AugmentationConfig
 from src.data.dataloaders import _apply_gpu_augmentations_batch
 from tools.colab_train_helpers import build_default_components, build_training_config
 from tools.prepare_datasets import build_default_configs
+from tools.train_ngiml import _stack_padded_tensors
 
 
 def test_prepare_default_configs_use_casia2_for_training_and_casia1_coverage_columbia_for_test():
@@ -137,3 +138,16 @@ def test_batched_gpu_augmentations_apply_forensic_degradations():
     assert out_high_pass is None
     assert out_edge_masks is None
     assert not torch.allclose(out_images, original)
+
+
+def test_stack_padded_tensors_aligns_spatial_shapes():
+    first = torch.ones(3, 384, 384)
+    second = torch.zeros(3, 472, 472)
+
+    stacked = _stack_padded_tensors([first, second])
+
+    assert stacked.shape == (2, 3, 472, 472)
+    assert torch.allclose(stacked[1], second)
+    assert torch.allclose(stacked[0, :, :384, :384], first)
+    assert torch.count_nonzero(stacked[0, :, 384:, :]) == 0
+    assert torch.count_nonzero(stacked[0, :, :, 384:]) == 0
