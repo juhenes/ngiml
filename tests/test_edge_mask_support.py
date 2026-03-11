@@ -98,6 +98,25 @@ def test_boundary_loss_matches_symmetric_band_fallback_when_no_explicit_edge():
     assert matching_loss.item() < non_matching_loss.item()
 
 
+def test_boundary_loss_runs_under_autocast_without_bce_error():
+    loss_fn = MultiStageManipulationLoss(
+        MultiStageLossConfig(
+            dice_weight=0.0,
+            bce_weight=0.0,
+            use_boundary_loss=True,
+            boundary_weight=1.0,
+        )
+    )
+    target = torch.zeros((1, 1, 8, 8), dtype=torch.float32)
+    target[:, :, 2:6, 2:6] = 1.0
+    logits = torch.zeros((1, 1, 8, 8), dtype=torch.float32)
+
+    with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+        loss = loss_fn([logits], target)
+
+    assert torch.isfinite(loss)
+
+
 def test_prepare_dataset_ignores_explicit_edge_mask_input(tmp_path):
     image_path = tmp_path / "image.png"
     mask_path = tmp_path / "mask.png"

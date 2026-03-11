@@ -292,8 +292,11 @@ class SobelBoundaryLoss(nn.Module):
                 present = edge_target_present.to(device=pred.device, dtype=pred.dtype).view(-1, 1, 1, 1)
                 band_target = present * explicit_edge + (1.0 - present) * band_target
 
-        bce = F.binary_cross_entropy(edge_prob, band_target)
-        dice = self._soft_dice(edge_prob, band_target)
+        with torch.autocast(device_type=pred.device.type, enabled=False):
+            edge_prob = edge_prob.float()
+            band_target = band_target.float()
+            bce = F.binary_cross_entropy(edge_prob, band_target)
+            dice = self._soft_dice(edge_prob, band_target)
         return 0.5 * (bce + dice)
 
 __all__ = [
