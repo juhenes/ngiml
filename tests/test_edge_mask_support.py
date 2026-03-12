@@ -6,6 +6,7 @@ from PIL import Image
 
 from src.data.config import Manifest, SampleRecord
 from src.model.losses import MultiStageLossConfig, MultiStageManipulationLoss
+from tools.local_infer_helpers import load_image_mask_from_record
 from tools.prepare_datasets import _build_npz_bytes
 
 
@@ -170,3 +171,26 @@ def test_prepare_dataset_roundtrips_non_jpeg_images_through_jpeg(tmp_path):
 
     with np.load(io.BytesIO(npz_bytes), allow_pickle=False) as data:
         assert np.array_equal(data["image"], expected_image)
+
+
+def test_local_infer_helper_loads_npz_after_edge_mask_signature_change(tmp_path):
+    npz_path = tmp_path / "sample.npz"
+    image = np.full((8, 8, 3), 255, dtype=np.uint8)
+    mask = np.ones((8, 8), dtype=np.uint8) * 255
+    high_pass = np.full((8, 8, 3), 128, dtype=np.uint8)
+    np.savez(npz_path, image=image, mask=mask, high_pass=high_pass)
+
+    record = SampleRecord(
+        dataset="CASIA2",
+        split="test",
+        image_path=str(npz_path),
+        mask_path=None,
+        label=1,
+    )
+
+    loaded_image, loaded_mask, loaded_high_pass = load_image_mask_from_record(record)
+
+    assert loaded_image.shape == (3, 8, 8)
+    assert loaded_mask.shape == (1, 8, 8)
+    assert loaded_high_pass is not None
+    assert loaded_high_pass.shape == (3, 8, 8)
