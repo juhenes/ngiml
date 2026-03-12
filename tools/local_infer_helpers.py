@@ -363,11 +363,19 @@ def load_image_mask_from_record(
     record: SampleRecord,
     max_short_side: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    def _unpack_loaded_sample(loaded: object) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+        if not isinstance(loaded, (tuple, list)):
+            raise TypeError(f"Expected tuple/list from NPZ loader, got {type(loaded).__name__}")
+        if len(loaded) < 3:
+            raise ValueError(f"NPZ loader returned {len(loaded)} values, expected at least 3")
+        image_local, mask_local, high_pass_local = loaded[:3]
+        return image_local, mask_local, high_pass_local
+
     image_path = str(record.image_path)
     if "::" in image_path and image_path.endswith(".npz"):
-        image, mask, high_pass = _load_from_tar_npz(image_path)[:3]
+        image, mask, high_pass = _unpack_loaded_sample(_load_from_tar_npz(image_path))
     elif image_path.endswith(".npz"):
-        image, mask, high_pass = _load_from_npz(_resolve_possible_local_path(image_path))[:3]
+        image, mask, high_pass = _unpack_loaded_sample(_load_from_npz(_resolve_possible_local_path(image_path)))
     else:
         image = _load_image(_resolve_possible_local_path(image_path))
         high_pass = None
