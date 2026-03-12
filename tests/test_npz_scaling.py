@@ -3,7 +3,7 @@ import torch
 
 from src.data.config import SampleRecord
 from src.data.dataloaders import _load_from_npz
-from tools.local_infer_helpers import load_image_mask_from_record
+from tools.infer_helpers import load_image_mask_from_record
 
 
 def test_npz_uint8_scaled_to_unit_float32(tmp_path):
