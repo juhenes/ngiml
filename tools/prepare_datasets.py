@@ -431,9 +431,9 @@ def build_default_configs() -> Tuple[List[DatasetStructureConfig], Dict[str, Spl
 
     per_dataset_splits = {
         "CASIA2": SplitConfig(train=0.8, val=0.2, test=0.0, seed=shared_seed),
-        "TampCOCO": SplitConfig(train=8.0, val=2.0, test=0.0, seed=shared_seed),
-        "NIST": SplitConfig(train=8.0, val=2.0, test=0.0, seed=shared_seed),
-        "IMD2020": SplitConfig(train=8.0, val=2.0, test=0.0, seed=shared_seed),
+        "TampCOCO": SplitConfig(train=0.8, val=0.2, test=0.0, seed=shared_seed),
+        "NIST": SplitConfig(train=0.8, val=0.2, test=0.0, seed=shared_seed),
+        "IMD2020": SplitConfig(train=0.8, val=0.2, test=0.0, seed=shared_seed),
         "CASIA1": SplitConfig(train=0.0, val=0.0, test=1.0, seed=shared_seed),
         "COVERAGE": SplitConfig(train=0.0, val=0.0, test=1.0, seed=shared_seed),
         "Columbia": SplitConfig(train=0.0, val=0.0, test=1.0, seed=shared_seed),
