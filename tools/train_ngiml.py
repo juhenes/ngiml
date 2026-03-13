@@ -2395,6 +2395,28 @@ def run_training(cfg: TrainConfig) -> None:
                     use_ema_for_model_state=(ema_model is not None),
                 )
                 print(f"New best val iou {best_val_iou:.4f}; saved to {best_iou_path}")
+                # If IoU is the early-stopping monitor, also save a best-F1 checkpoint
+                try:
+                    monitor_name = str(cfg.early_stopping_monitor).strip().lower()
+                except Exception:
+                    monitor_name = ""
+                if monitor_name == "iou":
+                    if val_f1 is not None and val_f1 > best_val_f1:
+                        best_val_f1 = val_f1
+                        best_f1_path = checkpoint_dir / "best_f1_checkpoint.pt"
+                        save_checkpoint(
+                            best_f1_path,
+                            model,
+                            optimizer,
+                            scaler,
+                            epoch + 1,
+                            global_step,
+                            cfg,
+                            scheduler=scheduler,
+                            ema_model=ema_model,
+                            use_ema_for_model_state=(ema_model is not None),
+                        )
+                        print(f"New best val f1 {best_val_f1:.4f}; saved to {best_f1_path}")
 
             # Require BOTH f1 and loss to improve for early stopping reset and best checkpoint
             both_improved = f1_improved and loss_improved
