@@ -197,9 +197,9 @@ class TrainConfig:
     device: Optional[str] = None
     aug_seed: Optional[int] = None
     seed: int = 42
-    early_stopping_patience: int = 12
+    early_stopping_patience: int = 7
     early_stopping_min_delta: float = 1e-4
-    early_stopping_monitor: str = "f1"
+    early_stopping_monitor: str = "loss"
     training_phase: str = "phase1"
     auto_phase2_enabled: bool = False
     auto_phase2_patience: int = 5
@@ -482,9 +482,9 @@ def parse_args() -> TrainConfig:
     parser.add_argument("--disable-aug", action="store_true", help="Disable GPU augmentations")
     parser.add_argument("--device", type=str, default=None, help="Override device (e.g., cuda:0 or cpu)")
     parser.add_argument("--seed", type=int, default=42, help="Global random seed for reproducibility")
-    parser.add_argument("--early-stopping-patience", type=int, default=12, help="Stop after N validations without improvement; <=0 disables")
+    parser.add_argument("--early-stopping-patience", type=int, default=5, help="Stop after N validations without improvement; <=0 disables")
     parser.add_argument("--early-stopping-min-delta", type=float, default=1e-4, help="Minimum monitored-metric improvement to reset early stopping")
-    parser.add_argument("--early-stopping-monitor", type=str, default="f1", choices=["iou", "dice", "f1", "recall", "precision", "accuracy", "loss"], help="Validation metric used for early stopping and best checkpoint")
+    parser.add_argument("--early-stopping-monitor", type=str, default="loss", choices=["iou", "dice", "f1", "recall", "precision", "accuracy", "loss"], help="Validation metric used for early stopping and best checkpoint")
     parser.add_argument("--training-phase", type=str, default="phase1", choices=["phase1", "phase2"], help="Training phase label stored in checkpoints and logs")
     parser.add_argument("--auto-phase2-enabled", action=argparse.BooleanOptionalAction, default=False, help="Automatically switch to phase 2 from the best IoU checkpoint after a phase-1 plateau")
     parser.add_argument("--auto-phase2-patience", type=int, default=5, help="Validations without improvement before auto phase-2 triggers during phase 1")
@@ -2198,6 +2198,8 @@ def run_training(cfg: TrainConfig) -> None:
 
     best_monitor_value = float("-inf")
     best_val_iou = float("-inf")
+    best_val_f1 = float("-inf")
+    best_val_loss = float("inf")
     no_improve_epochs = 0
     early_stopping_enabled = "val" in loaders and cfg.early_stopping_patience > 0
     best_threshold_path = checkpoint_dir / "best_threshold.json"
@@ -2324,6 +2326,9 @@ def run_training(cfg: TrainConfig) -> None:
                 )
 
             iou_improved = val_iou > (best_val_iou + cfg.early_stopping_min_delta)
+            f1_improved = val_f1 > (best_val_f1 + cfg.early_stopping_min_delta)
+            loss_improved = val_loss < (best_val_loss - cfg.early_stopping_min_delta)
+            # Save best iou checkpoint as before
             if iou_improved:
                 best_val_iou = val_iou
                 best_iou_path = checkpoint_dir / "best_iou_checkpoint.pt"
@@ -2341,9 +2346,12 @@ def run_training(cfg: TrainConfig) -> None:
                 )
                 print(f"New best val iou {best_val_iou:.4f}; saved to {best_iou_path}")
 
-            monitor_value = _metric_for_monitor(metrics, cfg.early_stopping_monitor)
-            improved = monitor_value > (best_monitor_value + cfg.early_stopping_min_delta)
-            if improved:
+            # Require BOTH f1 and loss to improve for early stopping reset and best checkpoint
+            both_improved = f1_improved and loss_improved
+            if both_improved:
+                best_val_f1 = val_f1
+                best_val_loss = val_loss
+                monitor_value = _metric_for_monitor(metrics, cfg.early_stopping_monitor)
                 best_monitor_value = monitor_value
                 no_improve_epochs = 0
                 best_alias_path = checkpoint_dir / "best_checkpoint.pt"
@@ -2381,14 +2389,14 @@ def run_training(cfg: TrainConfig) -> None:
                     },
                 )
                 print(
-                    f"New best val {cfg.early_stopping_monitor} {monitor_value:.4f}; "
+                    f"New best val f1 {val_f1:.4f} and loss {val_loss:.4f}; "
                     f"saved to {best_alias_path} (threshold metadata: {best_threshold_path})"
                 )
             elif early_stopping_enabled:
                 no_improve_epochs += 1
                 print(
                     f"Early stopping patience: {no_improve_epochs}/{cfg.early_stopping_patience} "
-                    f"without val {cfg.early_stopping_monitor} improvement"
+                    f"without BOTH val_f1 and val_loss improvement"
                 )
 
         should_checkpoint = ((epoch + 1) % cfg.checkpoint_every == 0) or (epoch + 1 == cfg.epochs)
