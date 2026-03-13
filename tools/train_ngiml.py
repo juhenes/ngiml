@@ -199,7 +199,7 @@ class TrainConfig:
     seed: int = 42
     early_stopping_patience: int = 7
     early_stopping_min_delta: float = 1e-4
-    early_stopping_monitor: str = "loss"
+    early_stopping_monitor: str = "iou"
     training_phase: str = "phase1"
     auto_phase2_enabled: bool = True
     auto_phase2_patience: int = 5
