@@ -359,6 +359,90 @@ def resize_for_inference(
     return image, mask, high_pass
 
 
+def should_use_high_pass_for_records(records: Sequence[SampleRecord]) -> bool:
+    """Mirror dataloader behavior: if any non-NPZ sample lacks high-pass, disable high-pass for the whole split."""
+    for record in records:
+        image_path = str(record.image_path)
+        is_npz_like = image_path.endswith(".npz")
+        if is_npz_like:
+            # NPZ/tar::NPZ samples synthesize high-pass fallback at load time.
+            continue
+        if record.high_pass_path is None:
+            return False
+    return True
+
+
+def collate_eval_batch_like_training(
+    records: Sequence[SampleRecord],
+    max_short_side: int | None = None,
+    use_high_pass: bool = True,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, list[str]]:
+    """Load and collate a batch using the same median-short-side resize + padding policy as training eval."""
+    images: list[torch.Tensor] = []
+    masks: list[torch.Tensor] = []
+    high_passes: list[torch.Tensor] = []
+    datasets: list[str] = []
+
+    for record in records:
+        image, mask, high_pass = load_image_mask_from_record(record, max_short_side=max_short_side)
+        images.append(image)
+        masks.append(mask)
+        datasets.append(str(record.dataset))
+        if use_high_pass and high_pass is not None:
+            high_passes.append(high_pass)
+
+    shorts = [min(int(img.shape[-2]), int(img.shape[-1])) for img in images]
+    target_short = int(round(float(torch.tensor(shorts, dtype=torch.float32).median().item()))) if shorts else 0
+
+    if target_short > 0:
+        for idx, image in enumerate(images):
+            h, w = image.shape[-2:]
+            short_side = min(h, w)
+            if short_side > 0 and short_side != target_short:
+                scale = float(target_short) / float(short_side)
+                new_h = max(1, int(round(h * scale)))
+                new_w = max(1, int(round(w * scale)))
+                images[idx] = TVF.resize(images[idx], [new_h, new_w], interpolation=InterpolationMode.BILINEAR)
+                masks[idx] = TVF.resize(masks[idx], [new_h, new_w], interpolation=InterpolationMode.NEAREST)
+                if use_high_pass and idx < len(high_passes):
+                    high_passes[idx] = TVF.resize(high_passes[idx], [new_h, new_w], interpolation=InterpolationMode.BILINEAR)
+
+    max_h = max(int(img.shape[-2]) for img in images)
+    max_w = max(int(img.shape[-1]) for img in images)
+
+    padded_images: list[torch.Tensor] = []
+    padded_masks: list[torch.Tensor] = []
+    padded_high_passes: list[torch.Tensor] = []
+
+    for idx, (image, mask) in enumerate(zip(images, masks)):
+        h, w = image.shape[-2:]
+        pad_h = max_h - h
+        pad_w = max_w - w
+        if pad_h > 0 or pad_w > 0:
+            image = F.pad(image.unsqueeze(0), (0, pad_w, 0, pad_h), mode="constant", value=0.0).squeeze(0)
+            mask = F.pad(mask.unsqueeze(0), (0, pad_w, 0, pad_h), mode="constant", value=0.0).squeeze(0)
+        padded_images.append(image)
+        padded_masks.append(mask)
+
+        if use_high_pass and idx < len(high_passes):
+            hp = high_passes[idx]
+            hh, hw = hp.shape[-2:]
+            hp_pad_h = max_h - hh
+            hp_pad_w = max_w - hw
+            if hp_pad_h > 0 or hp_pad_w > 0:
+                hp = F.pad(hp.unsqueeze(0), (0, hp_pad_w, 0, hp_pad_h), mode="constant", value=0.0).squeeze(0)
+            padded_high_passes.append(hp)
+
+    image_batch = torch.stack(padded_images, dim=0)
+    mask_batch = torch.stack(padded_masks, dim=0)
+
+    high_pass_batch = None
+    if use_high_pass and len(padded_high_passes) == len(padded_images):
+        high_pass_batch = torch.stack(padded_high_passes, dim=0)
+
+    return image_batch, mask_batch, high_pass_batch, datasets
+
+
 def load_image_mask_from_record(
     record: SampleRecord,
     max_short_side: int | None = None,
