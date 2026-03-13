@@ -1064,23 +1064,7 @@ def find_latest_checkpoint(output_dir: Path) -> Optional[Path]:
     if not checkpoint_dir.exists():
         return None
         candidates = sorted(checkpoint_dir.glob("checkpoint_epoch_*.pt"), key=_checkpoint_epoch)
-
-        def _is_checkpoint_readable(path: Path) -> bool:
-            try:
-                if not path.is_file() or path.stat().st_size == 0:
-                    return False
-                # Try a lightweight load on CPU to validate the file isn't truncated/corrupt.
-                torch.load(path, map_location="cpu")
-                return True
-            except Exception as exc:
-                print(f"Skipping unreadable/corrupt checkpoint {path}: {exc}")
-                return False
-
-        # Return the newest readable checkpoint (iterate newest->oldest)
-        for cand in reversed(candidates):
-            if _is_checkpoint_readable(cand):
-                return cand
-        return None
+        return candidates[-1] if candidates else None
 
 
 @torch.inference_mode()
