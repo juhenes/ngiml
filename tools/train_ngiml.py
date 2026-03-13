@@ -1571,6 +1571,56 @@ def train_one_epoch(
     normalization_mode: Optional[str] = None,
 ):
     model.train()
+    # --- Staged freezing/unfreezing for fine-tuning ONLY ---
+    # Only apply if in fine-tuning mode (resume checkpoint set or training_phase == 'phase2')
+    is_finetune = False
+    if hasattr(cfg, 'training_phase') and str(getattr(cfg, 'training_phase', '')).lower() == 'phase2':
+        is_finetune = True
+    elif hasattr(cfg, 'resume') and cfg.resume:
+        is_finetune = True
+
+    if is_finetune:
+        freeze_backbone_epochs = getattr(getattr(cfg, 'model_config', None), 'optimizer', None)
+        if freeze_backbone_epochs is not None:
+            freeze_backbone_epochs = getattr(freeze_backbone_epochs, 'freeze_backbone_epochs', 3)
+        else:
+            freeze_backbone_epochs = 3
+
+        def set_backbone_blocks_trainable(model, epoch):
+            # Freeze all backbone layers for first N epochs
+            if epoch < freeze_backbone_epochs:
+                for module_name in ("efficientnet", "swin"):
+                    module = getattr(model, module_name, None)
+                    if module is not None:
+                        for param in module.parameters():
+                            param.requires_grad = False
+            # Gradually unfreeze only the last block of each backbone after freeze_backbone_epochs
+            elif freeze_backbone_epochs <= epoch < 11:
+                for module_name in ("efficientnet", "swin"):
+                    module = getattr(model, module_name, None)
+                    if module is not None:
+                        if hasattr(module, 'blocks') and isinstance(module.blocks, (list, nn.ModuleList)):
+                            for i, block in enumerate(module.blocks):
+                                requires_grad = (i == len(module.blocks) - 1)
+                                for param in block.parameters():
+                                    param.requires_grad = requires_grad
+                        else:
+                            for param in module.parameters():
+                                param.requires_grad = True
+            else:
+                for module_name in ("efficientnet", "swin"):
+                    module = getattr(model, module_name, None)
+                    if module is not None:
+                        if hasattr(module, 'blocks') and isinstance(module.blocks, (list, nn.ModuleList)):
+                            for i, block in enumerate(module.blocks):
+                                requires_grad = (i == len(module.blocks) - 1)
+                                for param in block.parameters():
+                                    param.requires_grad = requires_grad
+                        else:
+                            for param in module.parameters():
+                                param.requires_grad = False
+
+        set_backbone_blocks_trainable(model, epoch)
     running_loss = 0.0
     num_batches = 0
     sampled_pos = 0.0
