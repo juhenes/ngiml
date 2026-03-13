@@ -195,7 +195,7 @@ class TrainConfig:
     noise_std_max: float = 0.01
     disable_aug: bool = False
     device: Optional[str] = None
-    aug_seed: Optional[int] = None
+    aug_seed: Optional[int] = 42
     seed: int = 42
     early_stopping_patience: int = 7
     early_stopping_min_delta: float = 1e-4
@@ -2141,6 +2141,9 @@ def run_training(cfg: TrainConfig) -> None:
     if cfg.cuda_expandable_segments and "PYTORCH_CUDA_ALLOC_CONF" not in os.environ:
         os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
+    # Force device to CUDA when available per user request
+    if torch.cuda.is_available():
+        cfg = replace(cfg, device="cuda")
     device = torch.device(cfg.device or ("cuda" if torch.cuda.is_available() else "cpu"))
     print(f"Using device: {device}")
     # Force precision to bfloat16 at runtime per user request
