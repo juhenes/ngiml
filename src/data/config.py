@@ -19,6 +19,7 @@ class DatasetStructureConfig:
     prepared_root: str
     edge_mask_subdir: str | None = None
     edge_mask_suffix: str | None = None
+    sample_limit: int = 0  # 0 means use all
 
     def root(self) -> Path:
         return Path(self.dataset_root) / self.dataset_name

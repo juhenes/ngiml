@@ -281,6 +281,14 @@ def prepare_single_dataset(
             )
         )
 
+    # Apply sampling limit if set
+    sample_limit = getattr(split_cfg, 'sample_limit', 0)
+    if hasattr(split_cfg, 'sample_limit_override'):
+        sample_limit = split_cfg.sample_limit_override
+    if sample_limit is not None and sample_limit > 0 and len(records) > sample_limit:
+        rng = random.Random(split_cfg.seed)
+        records = rng.sample(records, sample_limit)
+
     splits = _split_records(records, split_cfg)
 
     prepared_records: List[SampleRecord] = []
@@ -414,10 +422,21 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help="Name of a single dataset to process (e.g., CASIA2, IMD2020, Columbia, COVERAGE). If omitted, processes all.")
+    parser.add_argument(
+        "--sample-limit",
+        type=int,
+        default=0,
+        help="Maximum number of samples to use per dataset (0 = use all). Applies before splitting. Uses split seed for reproducibility.")
     return parser.parse_args()
 
 
 def main() -> None:
+    # Inject sample_limit into split configs if set
+    if hasattr(args, 'sample_limit') and args.sample_limit is not None:
+        for cfg in datasets:
+            split_cfg = per_dataset_splits.get(cfg.dataset_name)
+            if split_cfg is not None:
+                setattr(split_cfg, 'sample_limit_override', args.sample_limit)
     args = parse_args()
     datasets, per_dataset_splits, prep_cfg = build_default_configs()
 
