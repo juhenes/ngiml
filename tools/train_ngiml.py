@@ -991,14 +991,14 @@ def load_checkpoint(
 
     def _attempt_load(p: Path):
         try:
-            return torch.load(p, map_location=device)
+            return torch.load(p, map_location=device), p
         except Exception as exc:
-            return exc
+            return exc, p
 
-    loaded = _attempt_load(path)
-    if isinstance(loaded, Exception):
-        original_exc = loaded
-        print(f"Failed to load checkpoint {path}: {loaded}")
+    loaded_obj, loaded_path = _attempt_load(path)
+    if isinstance(loaded_obj, Exception):
+        original_exc = loaded_obj
+        print(f"Failed to load checkpoint {path}: {loaded_obj}")
         # Search for other checkpoint candidates in the same directory
         cand_dir = path.parent
         try:
@@ -1009,19 +1009,19 @@ def load_checkpoint(
         for cand in reversed(candidates):
             if cand == path:
                 continue
-            cand_loaded = _attempt_load(cand)
-            if not isinstance(cand_loaded, Exception):
+            cand_obj, cand_path = _attempt_load(cand)
+            if not isinstance(cand_obj, Exception):
                 print(f"Loaded fallback checkpoint {cand}")
-                loaded = cand_loaded
+                loaded_obj, loaded_path = cand_obj, cand_path
                 break
             else:
-                print(f"Skipping unreadable checkpoint {cand}: {cand_loaded}")
+                print(f"Skipping unreadable checkpoint {cand}: {cand_obj}")
 
-    if isinstance(loaded, Exception):
+    if isinstance(loaded_obj, Exception):
         # Nothing usable found
         raise RuntimeError(f"Unable to load checkpoint {path} or any fallback checkpoints: {original_exc}") from original_exc
 
-    data = loaded
+    data = loaded_obj
     model_state = data.get("raw_model_state") or data["model_state"]
     model.load_state_dict(model_state)
     if ema_model is not None:
@@ -1034,8 +1034,23 @@ def load_checkpoint(
         scheduler.load_state_dict(data["scheduler_state"])
     if data.get("scaler_state") and scaler.is_enabled():
         scaler.load_state_dict(data["scaler_state"])
-    start_epoch = int(data.get("epoch", 0))
+    # Prefer checkpoint-internal metadata, but fall back to parsing the
+    # filename when epoch is missing or zero (common for some exported weights).
+    raw_epoch = data.get("epoch")
+    if raw_epoch is None or int(raw_epoch) == 0:
+        parsed_epoch = _checkpoint_epoch(loaded_path) if loaded_path is not None else -1
+        if parsed_epoch > 0:
+            start_epoch = parsed_epoch
+        else:
+            start_epoch = int(raw_epoch or 0)
+    else:
+        start_epoch = int(raw_epoch)
+
     global_step = int(data.get("global_step", 0))
+    if global_step == 0:
+        # If global_step missing, try to infer from filename or leave as 0.
+        pass
+
     return start_epoch, global_step
 
 
