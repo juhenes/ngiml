@@ -223,7 +223,7 @@ def apply_colab_runtime_settings(
     recommended_workers = max(2, min(6, (os.cpu_count() or 4)))
     cache_dir = local_cache_dir or "/content/cache"
     if tune_for_large_batch:
-        runtime_precision = _recommended_cuda_precision(default="fp16")
+        runtime_precision = _recommended_cuda_precision(default="bf16")
         training_config.update(
             {
                 "batch_size": int(max(20, int(training_config.get("batch_size", 20)))),
