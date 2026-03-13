@@ -6,6 +6,10 @@ from src.model.hybrid_ngiml import HybridNGIMLConfig
 from src.model.losses import MultiStageLossConfig
 from src.data.config import AugmentationConfig
 
+def _recommended_cuda_precision(default="fp16"):
+    """Return recommended CUDA precision for Colab runtime. Extend as needed."""
+    return default
+
 def apply_phase2_resume_preset(
     training_config: dict,
     resume_checkpoint: str,
