@@ -191,13 +191,12 @@ def _build_npz_bytes(
     include_high_pass: bool = True,
     compute_edge_mask: bool = False,
 ) -> bytes:
+    image = Image.open(image_path).convert("RGB")
     if image_path.suffix.lower() not in {".jpg", ".jpeg"}:
         buf_jpg = io.BytesIO()
         image.save(buf_jpg, format="JPEG", quality=95)
         buf_jpg.seek(0)
         image = Image.open(buf_jpg).convert("RGB")
-    else:
-        image = Image.open(image_path).convert("RGB")
 
     mask_img = Image.open(mask_path).convert("L") if mask_path is not None else None
     edge_mask_img = Image.open(edge_mask_path).convert("L") if edge_mask_path is not None else None
