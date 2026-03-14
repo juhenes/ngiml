@@ -22,6 +22,13 @@ def _cfg_update(config, values: dict) -> None:
     for key, value in values.items():
         setattr(config, key, value)
 
+
+def _cfg_as_dict(config) -> dict:
+    if isinstance(config, dict):
+        return config
+    # Convert dataclass/class-style configs into a mapping for notebook helpers.
+    return dict(vars(config))
+
 def _recommended_cuda_precision(default="bf16"):
     """Return recommended CUDA precision for Colab runtime. Extend as needed."""
     return default
@@ -205,7 +212,7 @@ def apply_phase2_resume_preset(
                 continue
             group.lr = float(group.lr) * float(lr_scale)
 
-    return training_config
+    return _cfg_as_dict(training_config)
 
 
 def apply_colab_runtime_settings(
@@ -281,7 +288,7 @@ def apply_colab_runtime_settings(
         )
         _apply_effective_batch_optimizer_scaling(training_config, base_effective_batch=12)
 
-    return training_config
+    return _cfg_as_dict(training_config)
 
 
 
