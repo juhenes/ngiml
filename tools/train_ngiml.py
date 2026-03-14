@@ -151,9 +151,9 @@ class TrainConfig:
     manifest: str
     scheduler_type: str = "cosine"  # one of: 'cosine', 'step' (cosine enabled by default)
     output_dir: str = "runs/ngiml"
-    batch_size: int = 8
+    batch_size: int = 20
     epochs: int = 50
-    num_workers: int = max(2, min(8, (os.cpu_count() or 4) // 4))
+    num_workers: int = 6
     amp: bool = True
     pin_memory: bool = True
     channels_last: bool = True
@@ -167,7 +167,7 @@ class TrainConfig:
     xformers: bool = True
     cuda_expandable_segments: bool = True
     lr_schedule: bool = True
-    warmup_epochs: int = 5  # Linear warmup for first 5 epochs
+    warmup_epochs: int = 3  # Linear warmup for first 3 epochs
     min_lr_scale: float = 0.1  # Start at 10% base LR
     grad_clip: float = 1.0
     grad_accum_steps: int = 1
@@ -177,35 +177,33 @@ class TrainConfig:
     auto_resume: bool = True
     round_robin_seed: Optional[int] = 42
     balance_sampling: bool = False
-    balance_real_fake: bool = True
-    balanced_positive_ratio: float = 0.6
+    balance_real_fake: bool = False
+    balanced_positive_ratio: float = 0.5
     balanced_sampler_seed: int = 42
     balanced_sampler_num_samples: Optional[int] = None
-    prefetch_factor: Optional[int] = 1
+    prefetch_factor: Optional[int] = 2
     persistent_workers: bool = False
     drop_last: bool = True
     auto_local_cache: bool = True
-    local_cache_dir: Optional[str] = None
+    local_cache_dir: Optional[str] = "/cache"
     reuse_local_cache_manifest: bool = True
     views_per_sample: int = 3
-    # Cap the short side of input images early in the dataloader to avoid
-    # excessive spatial sizes that can trigger timm/Swin assertions or OOMs.
-    max_short_side: int = 384
-    max_rotation_degrees: float = 0.0
-    noise_std_max: float = 0.01
+    max_short_side: int = 480
+    max_rotation_degrees: float = 6.0
+    noise_std_max: float = 0.012
     disable_aug: bool = False
-    device: Optional[str] = None
+    device: Optional[str] = "cuda"
     aug_seed: Optional[int] = 42
     seed: int = 42
-    early_stopping_patience: int = 7
-    early_stopping_min_delta: float = 1e-4
+    early_stopping_patience: int = 12
+    early_stopping_min_delta: float = 0.0001
     early_stopping_monitor: str = "f1"
     training_phase: str = "phase1"
     auto_phase2_enabled: bool = True
     auto_phase2_patience: int = 5
     auto_phase2_lr_scale: float = 0.33
-    auto_phase2_tversky_weight: float = 0.5
-    auto_phase2_monitor: str = "f1"
+    auto_phase2_tversky_weight: float = 0.1
+    auto_phase2_monitor: str = "iou"
     metric_threshold: float = 0.5
     optimize_threshold: bool = True
     threshold_metric: str = "f1"
@@ -215,23 +213,23 @@ class TrainConfig:
     small_mask_ratio_max: float = 0.01
     medium_mask_ratio_max: float = 0.05
     compute_foreground_ratio: bool = True
-    foreground_ratio_max_batches: int = 40
-    short_side_probe_samples: int = 128
+    foreground_ratio_max_batches: int = 20
+    short_side_probe_samples: int = 0
     auto_pos_weight: bool = True
     pos_weight_min: float = 0.5
     pos_weight_max: float = 10.0
-    balanced_pos_weight_cap: float = 3.0
+    balanced_pos_weight_cap: float = 0.0
     loss_hybrid_mode: str = "dice_bce"
     dice_weight: float = 1.0
     bce_weight: float = 1.0
     focal_gamma: float = 2.0
     focal_alpha: float = 0.25
-    tversky_weight: float = 0.2
+    tversky_weight: float = 0.0
     tversky_alpha: float = 0.3
     tversky_beta: float = 0.8
     lovasz_weight: float = 0.0
-    use_boundary_loss: bool = False
-    boundary_weight: float = 0.05
+    use_boundary_loss: bool = True
+    boundary_weight: float = 0.03
     ema_enabled: bool = True
     ema_decay: float = 0.999
     hard_mining_enabled: bool = False
@@ -318,7 +316,7 @@ def build_default_components() -> tuple[HybridNGIMLConfig, MultiStageLossConfig,
         brightness_jitter_factors=(0.9, 1.1),
         contrast_jitter_factors=(0.9, 1.1),
         enable_noise=True,
-        noise_std_range=(0.0, 0.012),
+        noise_std_range=(0.0, max(0.0, cfg.noise_std_max)),
     )
 
     per_dataset_aug: dict[str, AugmentationConfig] = {}
@@ -490,7 +488,7 @@ def parse_args() -> TrainConfig:
     parser.add_argument("--auto-phase2-patience", type=int, default=5, help="Validations without improvement before auto phase-2 triggers during phase 1")
     parser.add_argument("--auto-phase2-lr-scale", type=float, default=0.33, help="LR multiplier applied when auto phase-2 activates")
     parser.add_argument("--auto-phase2-tversky-weight", type=float, default=0.1, help="Tversky loss weight applied during auto phase-2")
-    parser.add_argument("--auto-phase2-monitor", type=str, default="f1", choices=["iou", "f1", "dice"], help="Validation metric used for auto phase-2 monitoring and threshold selection")
+    parser.add_argument("--auto-phase2-monitor", type=str, default="iou", choices=["iou", "f1", "dice"], help="Validation metric used for auto phase-2 monitoring and threshold selection")
     parser.add_argument("--metric-threshold", type=float, default=0.5, help="Fixed threshold for sigmoid outputs when threshold optimization is disabled")
     parser.add_argument("--optimize-threshold", action=argparse.BooleanOptionalAction, default=True, help="Search validation thresholds and use the best for metric reporting")
     parser.add_argument("--threshold-metric", type=str, default="f1", choices=["iou", "dice", "f1"], help="Metric used to select best threshold")
@@ -518,7 +516,7 @@ def parse_args() -> TrainConfig:
     parser.add_argument(
         "--balanced-pos-weight-cap",
         type=float,
-        default=3.0,
+        default=0.0,
         help="When --balance-real-fake is enabled, cap auto pos_weight to this value (<=0 disables cap)",
     )
     parser.add_argument("--loss-hybrid-mode", type=str, default="dice_bce", choices=["dice_bce", "dice_focal"], help="Hybrid loss type")
@@ -1986,7 +1984,12 @@ def find_best_threshold(model: HybridNGIML, loader, device: torch.device, cfg: T
     scored_thresholds: list[tuple[float, dict]] = []
     for threshold in thresholds:
         stats = threshold_stats[float(threshold)]
-        metrics = _metrics_from_counts(stats["tp"], stats["tn"], stats["fp"], stats["fn"])
+        metrics = _metrics_from_counts(
+            stats["tp"],
+            stats["tn"],
+            stats["fp"],
+            stats["fn"],
+        )
         scored_thresholds.append((float(threshold), metrics))
 
     best_threshold, best_metrics = _select_threshold_with_precision_guard(scored_thresholds, optimize_key=optimize_key)

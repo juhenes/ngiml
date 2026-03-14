@@ -112,7 +112,7 @@ class MultiStageLossConfig:
     hybrid_mode: str = "dice_bce"  # one of: dice_bce, dice_focal
     focal_gamma: float = 2.0
     focal_alpha: float = 0.25
-    tversky_weight: float = 0.2
+    tversky_weight: float = 0.0
     tversky_alpha: float = 0.3
     tversky_beta: float = 0.8
     lovasz_weight: float = 0.0  # Weight for Lovasz Hinge Loss

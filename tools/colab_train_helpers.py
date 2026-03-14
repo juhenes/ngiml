@@ -145,7 +145,7 @@ def apply_phase2_resume_preset(
     training_config: dict,
     resume_checkpoint: str,
     lr_scale: float = 0.33,
-    tversky_weight: float = 0.5,
+    tversky_weight: float = 0.1,
     monitor_metric: str = "iou",
 ) -> dict:
     """Apply phase-2 fine-tuning settings after a phase-1 plateau.
@@ -177,13 +177,7 @@ def apply_phase2_resume_preset(
             "threshold_metric": metric,
             "tversky_weight": float(tversky_weight),
             "lovasz_weight": 0.0,
-            # Enable low-IoU hard-example weighting during phase-2 fine-tuning
-            "hard_mining_enabled": True,
-            # Keep the configured start epoch/weight/gamma if present, otherwise
-            # ensure reasonable defaults for resume fine-tuning.
-            "hard_mining_start_epoch": int(training_config.get("hard_mining_start_epoch", 0)),
-            "hard_mining_weight": float(training_config.get("hard_mining_weight", 0.03)),
-            "hard_mining_gamma": float(training_config.get("hard_mining_gamma", 2.0)),
+            "hard_mining_enabled": False,
         }
     )
 
