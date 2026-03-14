@@ -315,8 +315,8 @@ def build_default_components() -> tuple[HybridNGIMLConfig, MultiStageLossConfig,
         enable_color_jitter=True,
         brightness_jitter_factors=(0.9, 1.1),
         contrast_jitter_factors=(0.9, 1.1),
-        enable_noise=True,
-        noise_std_range=(0.0, max(0.0, cfg.noise_std_max)),
+        enable_noise=float(getattr(TrainConfig, "noise_std_max", 0.0)) > 0,
+        noise_std_range=(0.0, max(0.0, float(getattr(TrainConfig, "noise_std_max", 0.0)))),
     )
 
     per_dataset_aug: dict[str, AugmentationConfig] = {}
